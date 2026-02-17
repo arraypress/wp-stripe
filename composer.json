@@ -12,9 +12,9 @@
     }
   ],
   "require": {
-    "php": ">=8.1",
+    "php": ">=8.2",
     "stripe/stripe-php": "^19.0",
-    "arraypress/wp-currencies": "^1.0"
+    "arraypress/wp-currencies": "dev-main"
   },
   "autoload": {
     "psr-4": {
