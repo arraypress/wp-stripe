@@ -31,7 +31,7 @@ use WP_Error;
  *   $checkout = new Checkout( $client );
  *
  *   // Auto-detect mode (payment vs subscription)
- *   $session = $checkout->create_session( [
+ *   $session = $checkout->create( [
  *       [ 'price' => 'price_xxx', 'quantity' => 1 ],
  *   ], [
  *       'success_url' => home_url( '/thank-you/' ),
@@ -39,7 +39,13 @@ use WP_Error;
  *   ] );
  *
  *   // Explicit mode
- *   $session = $checkout->create( 'payment', $line_items, $args );
+ *   $session = $checkout->create( $line_items, [ 'mode' => 'payment', ... ] );
+ *
+ *   // Subscription with known recurring price IDs (avoids extra API call)
+ *   $session = $checkout->create( $line_items, [
+ *       'recurring_price_ids' => [ 'price_xxx' ],
+ *       'success_url'         => home_url( '/thank-you/' ),
+ *   ] );
  *
  * @since 1.0.0
  */
@@ -70,65 +76,57 @@ class Checkout {
 	 *  ======================================================================== */
 
 	/**
-	 * Create a checkout session with automatic mode detection.
+	 * Create a Stripe Checkout session.
 	 *
-	 * Determines whether to create a 'payment' or 'subscription' session
-	 * based on line items. Mode can be explicitly set via $args['mode'] to
-	 * skip detection.
+	 * Accepts line items and an optional args array. If 'mode' is not
+	 * provided in $args, the mode is auto-detected from the line items:
 	 *
-	 * Detection logic:
-	 * - If any line item has price_data.recurring, mode is 'subscription'.
-	 * - If $args['recurring_price_ids'] is provided and any line item price
-	 *   matches, mode is 'subscription'.
-	 * - Otherwise defaults to 'payment'.
+	 * - If any line item has price_data.recurring → 'subscription'
+	 * - If any line item price ID is in $args['recurring_price_ids'] → 'subscription'
+	 * - Otherwise → 'payment'
 	 *
-	 * This avoids extra Stripe API calls — the caller provides the recurring
-	 * price IDs they already know about (e.g., from a local database).
+	 * Passing $args['recurring_price_ids'] avoids extra Stripe API calls
+	 * by letting the caller supply known recurring price IDs from local data
+	 * (e.g., a local database of synced prices).
 	 *
-	 * @param array   $line_items              Array of line item arrays with 'price' and 'quantity' keys.
-	 * @param array   $args                    {
-	 *                                         Session arguments. Same as create() args plus:
+	 * @param array   $line_items                  Array of line item arrays with 'price' and 'quantity' keys.
+	 * @param array   $args                        {
+	 *                                             Optional session arguments.
 	 *
-	 * @type string   $mode                    Explicit mode override ('payment', 'subscription', 'setup').
-	 * @type string[] $recurring_price_ids     Array of Stripe price IDs known to be recurring.
-	 *                                         Used for auto-detection without extra API calls.
-	 *                                         }
+	 * @type string   $mode                        Explicit mode: 'payment', 'subscription', or 'setup'.
+	 *                                             Auto-detected from line items if omitted.
+	 * @type string[] $recurring_price_ids         Known recurring price IDs for auto-detection.
+	 *                                             Ignored if 'mode' is provided explicitly.
+	 * @type string   $success_url                 URL to redirect after successful payment. Default home_url().
+	 * @type string   $cancel_url                  URL to redirect on cancellation. Default home_url().
+	 * @type string   $customer                    Stripe customer ID to associate with the session.
+	 * @type string   $customer_email              Pre-fill the customer email field.
+	 * @type array    $metadata                    Key/value metadata attached to the session.
+	 * @type bool     $allow_promotion_codes       Show a promotion code input at checkout.
+	 * @type string   $billing_address_collection  'auto' or 'required'.
+	 * @type array    $phone_number_collection     [ 'enabled' => true ] to collect phone numbers.
+	 * @type array    $automatic_tax               [ 'enabled' => true ] to enable automatic tax.
+	 * @type array    $tax_id_collection           [ 'enabled' => true ] to collect tax IDs.
+	 * @type array    $custom_fields               Up to 3 custom fields to collect at checkout.
+	 * @type array    $custom_text                 Custom text to display at various checkout stages.
+	 * @type array    $consent_collection          Collect terms of service or marketing consent.
+	 * @type array    $subscription_data           Subscription-specific options (trial periods, etc.).
+	 * @type array    $managed_payments            Managed payments configuration.
+	 * @type string   $locale                      Checkout page locale.
+	 * @type array    $payment_method_types        Explicit list of payment method types to show.
+	 * @type array    $payment_intent_data         Options passed to the created PaymentIntent.
+	 * @type array    $invoice_creation            Invoice creation options for payment mode.
+	 * @type array    $after_expiration            Behaviour after session expiration.
+	 * @type int      $expires_at                  Unix timestamp for session expiration.
+	 * @type array    $shipping_address_collection Countries to allow for shipping address.
+	 * @type array    $shipping_options            Shipping rate options to present at checkout.
+	 *                                             }
 	 *
-	 * @return Session|WP_Error The checkout session or WP_Error on failure.
+	 * @return Session|WP_Error The created checkout session or WP_Error on failure.
 	 * @since 1.0.0
 	 *
 	 */
-	public function create_session( array $line_items, array $args = [] ): Session|WP_Error {
-		// Explicit mode takes priority
-		if ( ! empty( $args['mode'] ) ) {
-			$mode = $args['mode'];
-			unset( $args['mode'] );
-
-			return $this->create( $mode, $line_items, $args );
-		}
-
-		// Auto-detect from line items
-		$mode = $this->detect_mode( $line_items, $args['recurring_price_ids'] ?? [] );
-		unset( $args['recurring_price_ids'] );
-
-		return $this->create( $mode, $line_items, $args );
-	}
-
-	/**
-	 * Create a checkout session.
-	 *
-	 * Core creation method. Merges provided arguments with sensible defaults.
-	 * Merges provided arguments with sensible defaults.
-	 *
-	 * @param string $mode       'payment' or 'subscription'.
-	 * @param array  $line_items Array of line item arrays.
-	 * @param array  $args       Session arguments.
-	 *
-	 * @return Session|WP_Error The checkout session or WP_Error on failure.
-	 * @since 1.0.0
-	 *
-	 */
-	public function create( string $mode, array $line_items, array $args = [] ): Session|WP_Error {
+	public function create( array $line_items, array $args = [] ): Session|WP_Error {
 		$stripe = $this->client->stripe();
 
 		if ( ! $stripe ) {
@@ -138,6 +136,11 @@ class Checkout {
 		if ( empty( $line_items ) ) {
 			return new WP_Error( 'no_items', __( 'At least one line item is required.', 'arraypress' ) );
 		}
+
+		// Resolve mode — explicit takes priority, otherwise auto-detect
+		$mode = $args['mode'] ?? $this->detect_mode( $line_items, $args['recurring_price_ids'] ?? [] );
+
+		unset( $args['mode'], $args['recurring_price_ids'] );
 
 		$valid_modes = [ 'payment', 'subscription', 'setup' ];
 		if ( ! in_array( $mode, $valid_modes, true ) ) {
@@ -220,7 +223,7 @@ class Checkout {
 			$params['managed_payments'] = $args['managed_payments'];
 		}
 
-		// Allow any additional raw parameters
+		// Passthrough any additional raw parameters
 		$passthrough = [
 			'locale',
 			'payment_method_types',
@@ -357,13 +360,12 @@ class Checkout {
 	/**
 	 * Get all data needed to process a completed checkout session.
 	 *
-	 * Performs multiple API calls to assemble the complete dataset
-	 * needed for order creation: session details, line items, payment
-	 * card details, and customer country.
+	 * Performs a single expanded API call to assemble the complete dataset
+	 * needed for order creation: session details, line items, payment card
+	 * details, customer info, and discount data.
 	 *
-	 * This is designed for use inside a checkout.session.completed
-	 * webhook handler and eliminates the need to juggle multiple
-	 * API calls in your handler code.
+	 * Designed for use inside a checkout.session.completed webhook handler.
+	 * Eliminates the need to juggle multiple API calls in handler code.
 	 *
 	 * @param string $session_id        Stripe checkout session ID.
 	 *
@@ -504,10 +506,7 @@ class Checkout {
 			}
 		}
 
-		// 6. Detect test mode from key prefix
-		$is_test = $this->client->is_test_mode();
-
-		// 7. Assemble the complete dataset
+		// 6. Assemble the complete dataset
 		return [
 			'session_id'        => $session->id,
 			'payment_intent_id' => is_object( $pi ) ? $pi->id : ( $session->payment_intent ?? '' ),
@@ -525,7 +524,7 @@ class Checkout {
 			'status'            => $session->status ?? '',
 			'payment_status'    => $session->payment_status ?? '',
 			'metadata'          => (array) ( $session->metadata ?? [] ),
-			'is_test'           => $is_test,
+			'is_test'           => $this->client->is_test_mode(),
 			'line_items'        => $line_items,
 			'discount'          => $discount,
 		];
@@ -561,25 +560,24 @@ class Checkout {
 	 *
 	 * Checks for recurring indicators without making any Stripe API calls:
 	 *
-	 * 1. Inline price_data with a 'recurring' key → subscription
-	 * 2. Price ID found in $recurring_price_ids → subscription
-	 * 3. Otherwise → payment
+	 * 1. Inline price_data with a 'recurring' key → 'subscription'
+	 * 2. Price ID found in $recurring_price_ids → 'subscription'
+	 * 3. Otherwise → 'payment'
 	 *
 	 * @param array    $line_items          Line items array.
 	 * @param string[] $recurring_price_ids Known recurring price IDs from local data.
 	 *
 	 * @return string 'payment' or 'subscription'.
-	 * @since 1.0.0
+	 * @since  1.0.0
+	 * @access private
 	 *
 	 */
 	private function detect_mode( array $line_items, array $recurring_price_ids = [] ): string {
 		foreach ( $line_items as $item ) {
-			// Check inline price_data for recurring
 			if ( ! empty( $item['price_data']['recurring'] ) ) {
 				return 'subscription';
 			}
 
-			// Check price ID against known recurring IDs
 			if ( ! empty( $item['price'] ) && ! empty( $recurring_price_ids ) ) {
 				if ( in_array( $item['price'], $recurring_price_ids, true ) ) {
 					return 'subscription';

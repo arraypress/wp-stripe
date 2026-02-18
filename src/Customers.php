@@ -40,6 +40,8 @@ use WP_Error;
  */
 class Customers {
 
+	use Traits\Serializable;
+
 	/**
 	 * Client instance.
 	 *
@@ -173,6 +175,38 @@ class Customers {
 		} catch ( Exception $e ) {
 			return new WP_Error( 'stripe_error', $e->getMessage() );
 		}
+	}
+
+	/**
+	 * List customers from Stripe, returning plain stdClass objects.
+	 *
+	 * Identical to list() but strips Stripe SDK internals from each item
+	 * via JSON round-trip. Use when results will be passed to a REST
+	 * endpoint, stored in a transient, or handed to any system expecting
+	 * plain serializable objects (e.g., wp-inline-sync batch callbacks).
+	 *
+	 * @param array $params         {
+	 *                              Optional. Same parameters as list().
+	 *
+	 * @type string $email          Filter by email address.
+	 * @type int    $limit          Number of results (1-100). Default 100.
+	 * @type string $starting_after Cursor for pagination.
+	 *                              }
+	 *
+	 * @return array{items: \stdClass[], has_more: bool, cursor: string}|WP_Error
+	 *
+	 * @since 1.0.0
+	 *
+	 * @see   list()
+	 */
+	public function list_serialized( array $params = [] ): array|WP_Error {
+		$result = $this->list( $params );
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return $this->serialize_result( $result );
 	}
 
 	/** =========================================================================

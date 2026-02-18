@@ -46,6 +46,8 @@ use WP_Error;
  */
 class Subscriptions {
 
+	use Traits\Serializable;
+
 	/**
 	 * Client instance.
 	 *
@@ -156,6 +158,40 @@ class Subscriptions {
 		} catch ( Exception $e ) {
 			return new WP_Error( 'stripe_error', $e->getMessage() );
 		}
+	}
+
+	/**
+	 * List subscriptions for a customer, returning plain stdClass objects.
+	 *
+	 * Identical to list_by_customer() but strips Stripe SDK internals from
+	 * each item via JSON round-trip. Use when results will be passed to a
+	 * REST endpoint, stored in a transient, or handed to any system
+	 * expecting plain serializable objects (e.g., wp-inline-sync batch
+	 * callbacks).
+	 *
+	 * @param string $customer_id    Stripe customer ID.
+	 * @param array  $params         {
+	 *                               Optional. Same parameters as list_by_customer().
+	 *
+	 * @type string  $status         Filter by status: 'active', 'past_due', 'canceled', etc.
+	 * @type int     $limit          Number of results (1-100). Default 100.
+	 * @type string  $starting_after Cursor for pagination.
+	 *                               }
+	 *
+	 * @return array{items: \stdClass[], has_more: bool, cursor: string}|WP_Error
+	 *
+	 * @since 1.0.0
+	 *
+	 * @see   list_by_customer()
+	 */
+	public function list_by_customer_serialized( string $customer_id, array $params = [] ): array|WP_Error {
+		$result = $this->list_by_customer( $customer_id, $params );
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return $this->serialize_result( $result );
 	}
 
 	/** =========================================================================

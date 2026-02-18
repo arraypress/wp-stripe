@@ -52,6 +52,8 @@ use WP_Error;
  */
 class Prices {
 
+	use Traits\Serializable;
+
 	/**
 	 * Client instance.
 	 *
@@ -144,6 +146,43 @@ class Prices {
 	}
 
 	/**
+	 * List prices from Stripe, returning plain stdClass objects.
+	 *
+	 * Identical to list() but strips Stripe SDK internals from each item
+	 * via JSON round-trip. Use when results will be passed to a REST
+	 * endpoint, stored in a transient, or handed to any system expecting
+	 * plain serializable objects (e.g., wp-inline-sync batch callbacks).
+	 *
+	 * @param array $params         {
+	 *                              Optional. Same parameters as list().
+	 *
+	 * @type string $product        Filter by product ID.
+	 * @type bool   $active         Filter by active status.
+	 * @type string $type           Filter by type: 'one_time' or 'recurring'.
+	 * @type string $currency       Filter by currency code.
+	 * @type int    $limit          Number of results (1-100). Default 100.
+	 * @type string $starting_after Cursor for pagination.
+	 * @type array  $expand         Fields to expand (e.g., ['data.product']).
+	 *                              }
+	 *
+	 * @return array{items: \stdClass[], has_more: bool, cursor: string}|WP_Error
+	 *
+	 * @since 1.0.0
+	 *
+	 * @see   list()
+	 */
+	public function list_serialized( array $params = [] ): array|WP_Error {
+		$result = $this->list( $params );
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return $this->serialize_result( $result );
+	}
+
+
+	/**
 	 * List all prices for a specific product.
 	 *
 	 * Convenience wrapper that filters by product ID.
@@ -169,6 +208,43 @@ class Prices {
 		}
 
 		return $result['items'];
+	}
+
+	/**
+	 * List all prices for a specific product, returning plain stdClass objects.
+	 *
+	 * Identical to list_by_product() but strips Stripe SDK internals from
+	 * each item via JSON round-trip. Use when results will be passed to a
+	 * REST endpoint, stored in a transient, or handed to any system
+	 * expecting plain serializable objects (e.g., wp-inline-sync batch
+	 * callbacks).
+	 *
+	 * @param string $product_id Stripe product ID.
+	 * @param bool   $active     Only return active prices. Default true.
+	 *
+	 * @return \stdClass[]|WP_Error Array of plain price objects or WP_Error on failure.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @see   list_by_product()
+	 */
+	public function list_by_product_serialized( string $product_id, bool $active = true ): array|WP_Error {
+		$params = [ 'product' => $product_id ];
+
+		if ( $active ) {
+			$params['active'] = true;
+		}
+
+		$result = $this->list( $params );
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return array_map(
+			fn( $item ) => json_decode( json_encode( $item ) ),
+			$result['items']
+		);
 	}
 
 	/** =========================================================================

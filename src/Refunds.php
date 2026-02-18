@@ -55,9 +55,10 @@ class Refunds {
 	/**
 	 * Constructor.
 	 *
+	 * @param Client $client The Stripe client instance.
+	 *
 	 * @since 1.0.0
 	 *
-	 * @param Client $client The Stripe client instance.
 	 */
 	public function __construct( Client $client ) {
 		$this->client = $client;
@@ -74,19 +75,19 @@ class Refunds {
 	 * Omit 'amount' for a full refund, or pass it in major currency
 	 * units (e.g., 5.00 for $5.00) for a partial refund.
 	 *
-	 * @since 1.0.0
-	 *
 	 * @param string $payment_id Payment intent ID or charge ID.
 	 * @param array  $args       {
-	 *     Optional refund arguments.
+	 *                           Optional refund arguments.
 	 *
-	 *     @type float  $amount   Refund amount in major units. Omit for full refund.
-	 *     @type string $currency ISO 4217 currency code. Default 'USD'. Only needed for partial.
-	 *     @type string $reason   'duplicate', 'fraudulent', or 'requested_by_customer'.
-	 *     @type array  $metadata Key/value metadata pairs.
-	 * }
+	 * @type float   $amount     Refund amount in major units. Omit for full refund.
+	 * @type string  $currency   ISO 4217 currency code. Default 'USD'. Only needed for partial.
+	 * @type string  $reason     'duplicate', 'fraudulent', or 'requested_by_customer'.
+	 * @type array   $metadata   Key/value metadata pairs.
+	 *                           }
 	 *
 	 * @return Refund|WP_Error The refund or WP_Error on failure.
+	 * @since 1.0.0
+	 *
 	 */
 	public function create( string $payment_id, array $args = [] ): Refund|WP_Error {
 		$stripe = $this->client->stripe();
@@ -146,24 +147,24 @@ class Refunds {
 	 *
 	 * Designed for use inside a charge.refunded webhook handler.
 	 *
-	 * @since 1.0.0
-	 *
-	 * @param \Stripe\Event $event The charge.refunded Stripe event.
+	 * @param \Stripe\Event $event             The charge.refunded Stripe event.
 	 *
 	 * @return array {
 	 *     Refund data for order processing.
 	 *
-	 *     @type string $charge_id          Stripe charge ID.
-	 *     @type string $payment_intent_id  Stripe payment intent ID.
-	 *     @type int    $amount_refunded    Total amount refunded in smallest unit.
-	 *     @type int    $amount_captured    Original captured amount.
-	 *     @type string $currency           ISO 4217 currency code (lowercase).
-	 *     @type bool   $fully_refunded     Whether the charge is fully refunded.
-	 *     @type string $reason             Refund reason from the latest refund.
-	 *     @type string $refund_id          ID of the latest refund.
-	 *     @type int    $latest_amount      Amount of the latest refund.
-	 *     @type string $status             Charge status.
-	 * }
+	 * @type string         $charge_id         Stripe charge ID.
+	 * @type string         $payment_intent_id Stripe payment intent ID.
+	 * @type int            $amount_refunded   Total amount refunded in smallest unit.
+	 * @type int            $amount_captured   Original captured amount.
+	 * @type string         $currency          ISO 4217 currency code (lowercase).
+	 * @type bool           $fully_refunded    Whether the charge is fully refunded.
+	 * @type string         $reason            Refund reason from the latest refund.
+	 * @type string         $refund_id         ID of the latest refund.
+	 * @type int            $latest_amount     Amount of the latest refund.
+	 * @type string         $status            Charge status.
+	 *                                         }
+	 * @since 1.0.0
+	 *
 	 */
 	public function get_refund_data( \Stripe\Event $event ): array {
 		$charge = $event->data->object;
@@ -193,11 +194,11 @@ class Refunds {
 	/**
 	 * Retrieve a refund.
 	 *
-	 * @since 1.0.0
-	 *
 	 * @param string $refund_id Stripe refund ID.
 	 *
 	 * @return Refund|WP_Error The refund or WP_Error on failure.
+	 * @since 1.0.0
+	 *
 	 */
 	public function get( string $refund_id ): Refund|WP_Error {
 		$stripe = $this->client->stripe();
@@ -216,12 +217,12 @@ class Refunds {
 	/**
 	 * List refunds for a payment.
 	 *
-	 * @since 1.0.0
-	 *
 	 * @param string $payment_id Payment intent ID or charge ID.
 	 * @param int    $limit      Maximum results. Default 100.
 	 *
 	 * @return Refund[]|WP_Error Array of refunds or WP_Error on failure.
+	 * @since 1.0.0
+	 *
 	 */
 	public function list_by_payment( string $payment_id, int $limit = 100 ): array|WP_Error {
 		$stripe = $this->client->stripe();
@@ -245,6 +246,39 @@ class Refunds {
 		} catch ( Exception $e ) {
 			return new WP_Error( 'stripe_error', $e->getMessage() );
 		}
+	}
+
+	/**
+	 * List refunds for a payment, returning plain stdClass objects.
+	 *
+	 * Identical to list_by_payment() but strips Stripe SDK internals from
+	 * each item via JSON round-trip. Use when results will be passed to a
+	 * REST endpoint, stored in a transient, or handed to any system
+	 * expecting plain serializable objects (e.g., wp-inline-sync batch
+	 * callbacks).
+	 *
+	 * Accepts either a payment intent ID (pi_xxx) or charge ID (ch_xxx).
+	 *
+	 * @param string $payment_id Payment intent ID or charge ID.
+	 * @param int    $limit      Maximum results. Default 100.
+	 *
+	 * @return \stdClass[]|WP_Error Array of plain refund objects or WP_Error on failure.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @see   list_by_payment()
+	 */
+	public function list_by_payment_serialized( string $payment_id, int $limit = 100 ): array|WP_Error {
+		$result = $this->list_by_payment( $payment_id, $limit );
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return array_map(
+			fn( $item ) => json_decode( json_encode( $item ) ),
+			$result
+		);
 	}
 
 }

@@ -330,6 +330,41 @@ class Radar {
 		}
 	}
 
+	/**
+	 * List items in a value list, returning plain stdClass objects.
+	 *
+	 * Identical to list_items() but strips Stripe SDK internals from each
+	 * item via JSON round-trip. Use when results will be passed to a REST
+	 * endpoint, stored in a transient, or handed to any system expecting
+	 * plain serializable objects (e.g., wp-inline-sync batch callbacks).
+	 *
+	 * Accepts either a value list ID (rsl_xxx) or an alias string
+	 * (e.g., Radar::LIST_BLOCK_EMAIL).
+	 *
+	 * @param string $list_id_or_alias Value list ID (rsl_xxx) or alias.
+	 * @param int    $limit            Maximum results. Default 100.
+	 *
+	 * @return array{items: \stdClass[], has_more: bool}|WP_Error
+	 *
+	 * @since 1.0.0
+	 *
+	 * @see   list_items()
+	 */
+	public function list_items_serialized( string $list_id_or_alias, int $limit = 100 ): array|WP_Error {
+		$result = $this->list_items( $list_id_or_alias, $limit );
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		$result['items'] = array_map(
+			fn( $item ) => json_decode( json_encode( $item ) ),
+			$result['items']
+		);
+
+		return $result;
+	}
+
 	/** =========================================================================
 	 *  Custom List Management
 	 *  ======================================================================== */
@@ -434,6 +469,37 @@ class Radar {
 		} catch ( Exception $e ) {
 			return new WP_Error( 'stripe_error', $e->getMessage() );
 		}
+	}
+
+	/**
+	 * List all value lists, returning plain stdClass objects.
+	 *
+	 * Identical to list_all() but strips Stripe SDK internals from each
+	 * item via JSON round-trip. Use when results will be passed to a REST
+	 * endpoint, stored in a transient, or handed to any system expecting
+	 * plain serializable objects (e.g., wp-inline-sync batch callbacks).
+	 *
+	 * @param array $params Optional. Same parameters as list_all().
+	 *
+	 * @return array{items: \stdClass[], has_more: bool}|WP_Error
+	 *
+	 * @since 1.0.0
+	 *
+	 * @see   list_all()
+	 */
+	public function list_all_serialized( array $params = [] ): array|WP_Error {
+		$result = $this->list_all( $params );
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		$result['items'] = array_map(
+			fn( $item ) => json_decode( json_encode( $item ) ),
+			$result['items']
+		);
+
+		return $result;
 	}
 
 	/**
