@@ -20,6 +20,7 @@ defined( 'ABSPATH' ) || exit;
 
 use ArrayPress\Currencies\Currency;
 use Exception;
+use Stripe\Event;
 use Stripe\Refund;
 use WP_Error;
 
@@ -147,7 +148,7 @@ class Refunds {
 	 *
 	 * Designed for use inside a charge.refunded webhook handler.
 	 *
-	 * @param \Stripe\Event $event             The charge.refunded Stripe event.
+	 * @param Event $event             The charge.refunded Stripe event.
 	 *
 	 * @return array {
 	 *     Refund data for order processing.
@@ -166,7 +167,7 @@ class Refunds {
 	 * @since 1.0.0
 	 *
 	 */
-	public function get_refund_data( \Stripe\Event $event ): array {
+	public function get_refund_data( Event $event ): array {
 		$charge = $event->data->object;
 
 		// Get the latest refund details

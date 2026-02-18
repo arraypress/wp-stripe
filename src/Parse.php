@@ -2,12 +2,12 @@
 /**
  * Stripe Object Parser
  *
- * Extracts normalized values from Stripe API objects. These helpers
- * encapsulate knowledge of Stripe's data shapes so consumer code
- * doesn't need to know how images, features, or metadata are stored.
+ * Extracts and resolves normalised values from Stripe API objects. These helpers
+ * encapsulate knowledge of Stripe's data shapes so consumer code doesn't need
+ * to know how images, features, metadata, currencies, or intervals are stored.
  *
- * All methods accept plain stdClass objects (post-serialization) or
- * live Stripe SDK objects interchangeably.
+ * All methods accept plain stdClass objects (post-serialization) or live Stripe
+ * SDK objects interchangeably.
  *
  * @package     ArrayPress\Stripe
  * @copyright   Copyright (c) 2025, ArrayPress Limited
@@ -23,19 +23,21 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Class Parse
  *
- * Static helpers for extracting data from Stripe objects.
+ * Static helpers for extracting and resolving data from Stripe objects.
  *
  * Usage:
  *   $image    = Parse::product_image( $product );
  *   $features = Parse::product_features_json( $product );
  *   $metadata = Parse::metadata_json( $item );
+ *   $currency = Parse::currency( $price );
+ *   $interval = Parse::interval( $price );
  *
  * @since 1.0.0
  */
 class Parse {
 
 	/** =========================================================================
-	 *  Product
+	 *  Images
 	 *  ======================================================================== */
 
 	/**
@@ -73,6 +75,10 @@ class Parse {
 
 		return [];
 	}
+
+	/** =========================================================================
+	 *  Features
+	 *  ======================================================================== */
 
 	/**
 	 * Extract marketing feature names from a Stripe product object.
@@ -160,49 +166,166 @@ class Parse {
 	}
 
 	/** =========================================================================
-	 *  Recurring / Pricing
+	 *  Currency
 	 *  ======================================================================== */
 
 	/**
-	 * Get the recurring interval from a Stripe price object.
+	 * Resolve the currency code from a Stripe API object or local DB row object.
 	 *
+	 * Checks multiple locations in priority order to cover all object types:
+	 *
+	 * - Flat DB row objects: direct `currency` property (prices table, orders table)
+	 * - Stripe API prices/charges/invoices/sessions: direct `currency` property
+	 * - Stripe API line items / subscription items: nested `price->currency`
+	 * - Stripe API inline checkout line items: nested `price_data->currency`
+	 *
+	 * Falls back to the provided default if currency cannot be resolved.
+	 *
+	 * @param object $item    Stripe API object or local DB row object.
+	 * @param string $default Default currency code if not found. Default 'USD'.
+	 *
+	 * @return string Uppercase ISO 4217 currency code.
+	 * @since 1.0.0
+	 */
+	public static function currency( object $item, string $default = 'USD' ): string {
+		// Direct currency property — covers both flat DB rows and most Stripe API objects
+		if ( ! empty( $item->currency ) ) {
+			return strtoupper( $item->currency );
+		}
+
+		// Nested price object (Stripe API line items, subscription items)
+		if ( isset( $item->price->currency ) && ! empty( $item->price->currency ) ) {
+			return strtoupper( $item->price->currency );
+		}
+
+		// Inline price_data (Stripe API checkout session line items built on the fly)
+		if ( isset( $item->price_data->currency ) && ! empty( $item->price_data->currency ) ) {
+			return strtoupper( $item->price_data->currency );
+		}
+
+		return strtoupper( $default );
+	}
+
+	/** =========================================================================
+	 *  Recurring / Interval
+	 *  ======================================================================== */
+
+	/**
+	 * Get the recurring interval from a Stripe API price object.
+	 *
+	 * For flat DB row objects use interval_data() which handles both shapes.
 	 * Returns null for one-time prices that have no recurring object.
 	 *
-	 * @param object $price Stripe price object.
+	 * @param object $price Stripe API price object.
 	 *
 	 * @return string|null Interval string ('day', 'week', 'month', 'year') or null.
 	 * @since 1.0.0
 	 */
-	public static function price_interval( object $price ): ?string {
+	public static function interval( object $price ): ?string {
+		if ( property_exists( $price, 'recurring_interval' ) ) {
+			return $price->recurring_interval ?: null;
+		}
+
+		// Stripe API price object
 		return $price->recurring->interval ?? null;
 	}
 
 	/**
-	 * Get the recurring interval count from a Stripe price object.
+	 * Get the recurring interval count from a Stripe API price object.
 	 *
+	 * For flat DB row objects use interval_data() which handles both shapes.
 	 * Returns null for one-time prices.
 	 *
-	 * @param object $price Stripe price object.
+	 * @param object $price Stripe API price object or flat DB row.
 	 *
 	 * @return int|null Interval count or null.
 	 * @since 1.0.0
 	 */
-	public static function price_interval_count( object $price ): ?int {
+	public static function interval_count( object $price ): ?int {
+		if ( property_exists( $price, 'recurring_interval_count' ) ) {
+			return $price->recurring_interval_count !== null
+				? (int) $price->recurring_interval_count
+				: null;
+		}
+
+		// Stripe API price object
 		return isset( $price->recurring->interval_count )
 			? (int) $price->recurring->interval_count
 			: null;
 	}
 
 	/**
-	 * Check whether a Stripe price is recurring.
+	 * Resolve both interval and interval_count from any object.
 	 *
-	 * @param object $price Stripe price object.
+	 * Handles all three data shapes in priority order:
+	 *
+	 * 1. Flat DB row objects (prices table):
+	 *    `recurring_interval`, `recurring_interval_count`
+	 *
+	 * 2. Stripe API objects with a nested price (line items, subscription items):
+	 *    `price->recurring->interval`, `price->recurring->interval_count`
+	 *
+	 * 3. Stripe API objects with inline price_data (checkout session line items):
+	 *    `price_data->recurring->interval`, `price_data->recurring->interval_count`
+	 *
+	 * 4. Stripe API price objects directly:
+	 *    `recurring->interval`, `recurring->interval_count`
+	 *
+	 * @param object $item Stripe API object or flat DB row object.
+	 *
+	 * @return array{interval: string|null, interval_count: int} Interval data.
+	 * @since 1.0.0
+	 */
+	public static function interval_data( object $item ): array {
+		// Flat DB row — prices table uses recurring_interval / recurring_interval_count columns
+		if ( property_exists( $item, 'recurring_interval' ) ) {
+			$interval = $item->recurring_interval ?: null;
+
+			return [
+				'interval'       => $interval,
+				'interval_count' => $interval ? (int) ( $item->recurring_interval_count ?? 1 ) : 1,
+			];
+		}
+
+		// Stripe API: nested price object (line items, subscription items)
+		if ( isset( $item->price->recurring->interval ) ) {
+			return [
+				'interval'       => $item->price->recurring->interval,
+				'interval_count' => (int) ( $item->price->recurring->interval_count ?? 1 ),
+			];
+		}
+
+		// Stripe API: inline price_data (checkout session line items)
+		if ( isset( $item->price_data->recurring->interval ) ) {
+			return [
+				'interval'       => $item->price_data->recurring->interval,
+				'interval_count' => (int) ( $item->price_data->recurring->interval_count ?? 1 ),
+			];
+		}
+
+		// Stripe API: price object directly
+		if ( isset( $item->recurring->interval ) ) {
+			return [
+				'interval'       => $item->recurring->interval,
+				'interval_count' => (int) ( $item->recurring->interval_count ?? 1 ),
+			];
+		}
+
+		return [ 'interval' => null, 'interval_count' => 1 ];
+	}
+
+	/**
+	 * Check whether an object represents a recurring price.
+	 *
+	 * Handles both flat DB row objects and Stripe API price objects.
+	 *
+	 * @param object $price Stripe API price object or flat DB row.
 	 *
 	 * @return bool True if the price has a recurring interval.
 	 * @since 1.0.0
 	 */
 	public static function is_recurring( object $price ): bool {
-		return ! empty( $price->recurring->interval );
+		return ! empty( self::interval( $price ) );
 	}
 
 }

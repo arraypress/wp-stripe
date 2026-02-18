@@ -37,6 +37,12 @@ use Stripe\StripeClient;
  *       'mode'            => 'test',
  *   ] );
  *
+ *   // With a custom API version (e.g. for Managed Payments):
+ *   $client = new Client( [
+ *       'secret_key'  => fn() => get_option( 'stripe_secret' ),
+ *       'api_version' => '2026-01-28.clover; managed_payments_preview=v1',
+ *   ] );
+ *
  *   $client->stripe()->products->create( [...] );
  *
  * @since 1.0.0
@@ -57,7 +63,7 @@ class Client {
 	 * Configuration values.
 	 *
 	 * Each value may be a string or a callable that returns a string.
-	 * Supported keys: secret_key, publishable_key, webhook_secret, mode.
+	 * Supported keys: secret_key, publishable_key, webhook_secret, mode, api_version.
 	 *
 	 * @since 1.0.0
 	 * @var array
@@ -85,6 +91,9 @@ class Client {
 	 * @type string|callable $publishable_key Stripe publishable key or resolver.
 	 * @type string|callable $webhook_secret  Webhook signing secret or resolver.
 	 * @type string|callable $mode            'test' or 'live', or resolver. Default 'test'.
+	 * @type string|callable $api_version     Stripe API version string or resolver. Optional.
+	 *                                        Required for features like Managed Payments
+	 *                                        (e.g. '2026-01-28.clover; managed_payments_preview=v1').
 	 *                                        }
 	 * @since 1.0.0
 	 *
@@ -95,6 +104,7 @@ class Client {
 			'publishable_key' => '',
 			'webhook_secret'  => '',
 			'mode'            => 'test',
+			'api_version'     => '',
 		] );
 	}
 
@@ -106,6 +116,10 @@ class Client {
 	 * Get the Stripe SDK client.
 	 *
 	 * Initializes the client on first call using the resolved secret key.
+	 * If an api_version is configured, it is passed to the client to
+	 * override the SDK default — required for preview features such as
+	 * Managed Payments.
+	 *
 	 * Returns null if the secret key is empty or initialization fails.
 	 *
 	 * @return StripeClient|null The Stripe client or null if not configured.
@@ -124,7 +138,14 @@ class Client {
 		}
 
 		try {
-			$this->client = new StripeClient( $key );
+			$options = [ 'api_key' => $key ];
+
+			$api_version = $this->get_api_version();
+			if ( ! empty( $api_version ) ) {
+				$options['stripe_version'] = $api_version;
+			}
+
+			$this->client = new StripeClient( $options );
 		} catch ( Exception $e ) {
 			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 				error_log( '[ArrayPress\Stripe] Client init error: ' . $e->getMessage() );
@@ -171,6 +192,25 @@ class Client {
 	 */
 	public function get_webhook_secret(): string {
 		return (string) $this->resolve( 'webhook_secret' );
+	}
+
+	/** =========================================================================
+	 *  API Version
+	 *  ======================================================================== */
+
+	/**
+	 * Get the configured API version string.
+	 *
+	 * Returns empty string if not set, in which case the Stripe SDK
+	 * default version is used. Set a custom version for preview features
+	 * such as Managed Payments.
+	 *
+	 * @return string API version string or empty string.
+	 * @since 1.0.0
+	 *
+	 */
+	public function get_api_version(): string {
+		return (string) $this->resolve( 'api_version' );
 	}
 
 	/** =========================================================================
