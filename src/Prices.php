@@ -24,6 +24,7 @@ defined( 'ABSPATH' ) || exit;
 
 use ArrayPress\Currencies\Currency;
 use Exception;
+use stdClass;
 use Stripe\Price;
 use WP_Error;
 
@@ -165,7 +166,7 @@ class Prices {
 	 * @type array  $expand         Fields to expand (e.g., ['data.product']).
 	 *                              }
 	 *
-	 * @return array{items: \stdClass[], has_more: bool, cursor: string}|WP_Error
+	 * @return array{items: stdClass[], has_more: bool, cursor: string}|WP_Error
 	 *
 	 * @since 1.0.0
 	 *
@@ -222,7 +223,7 @@ class Prices {
 	 * @param string $product_id Stripe product ID.
 	 * @param bool   $active     Only return active prices. Default true.
 	 *
-	 * @return \stdClass[]|WP_Error Array of plain price objects or WP_Error on failure.
+	 * @return stdClass[]|WP_Error Array of plain price objects or WP_Error on failure.
 	 *
 	 * @since 1.0.0
 	 *
@@ -310,7 +311,7 @@ class Prices {
 
 			$params['recurring'] = [
 				'interval'       => $args['interval'],
-				'interval_count' => max( 1, (int) ( $args['interval_count'] ?? 1 ) ),
+				'interval_count' => (int) max( 1, (int) ( $args['interval_count'] ?? 1 ) ),
 			];
 		}
 

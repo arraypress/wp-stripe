@@ -53,6 +53,9 @@
 namespace ArrayPress\Stripe\Traits;
 
 // Exit if accessed directly
+use stdClass;
+use Stripe\ApiResource;
+
 defined( 'ABSPATH' ) || exit;
 
 /**
@@ -89,20 +92,20 @@ trait Serializable {
 	 * type information are discarded. The resulting objects are read-only
 	 * data bags and should not be passed back to Stripe API methods.
 	 *
-	 * @param array                $result   {
+	 * @param array        $result           {
 	 *                                       Paginated list result from any list() method.
 	 *
-	 * @type \Stripe\ApiResource[] $items    Array of Stripe SDK objects.
-	 * @type bool                  $has_more Whether more pages exist.
-	 * @type string                $cursor   Cursor ID for the next page.
+	 * @type ApiResource[] $items            Array of Stripe SDK objects.
+	 * @type bool          $has_more         Whether more pages exist.
+	 * @type string        $cursor           Cursor ID for the next page.
 	 *                                       }
 	 *
 	 * @return array {
 	 *     Same structure with items as plain stdClass objects.
 	 *
-	 * @type \stdClass[]           $items    Serialized plain objects.
-	 * @type bool                  $has_more Whether more pages exist.
-	 * @type string                $cursor   Cursor ID for the next page.
+	 * @type stdClass[]    $items            Serialized plain objects.
+	 * @type bool          $has_more         Whether more pages exist.
+	 * @type string        $cursor           Cursor ID for the next page.
 	 *                                       }
 	 * @since  1.0.0
 	 * @access private

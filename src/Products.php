@@ -377,7 +377,7 @@ class Products {
 			);
 		}
 
-		if ( ! Utilities::is_public_url( $url ) ) {
+		if ( ! Validate::is_public_url( $url ) ) {
 			return new WP_Error(
 				'private_url',
 				__( 'Attachment URL is not publicly accessible. Stripe requires public URLs.', 'arraypress' )
