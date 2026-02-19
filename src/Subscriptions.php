@@ -194,6 +194,80 @@ class Subscriptions {
 		return $this->serialize_result( $result );
 	}
 
+	/**
+	 * List subscriptions with optional filters.
+	 *
+	 * Returns a paginated list of subscriptions across all customers.
+	 * Useful for admin listing pages and reporting.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param array $params {
+	 *     Optional. Filter and pagination parameters.
+	 *
+	 *     @type string $status         Filter by status: 'active', 'past_due', 'canceled', 'unpaid',
+	 *                                  'incomplete', 'incomplete_expired', 'trialing', 'paused', 'all'.
+	 *     @type string $price          Filter by price ID.
+	 *     @type string $customer       Filter by customer ID.
+	 *     @type array  $created        Filter by creation date (e.g., ['gte' => timestamp]).
+	 *     @type int    $limit          Number of results per page (default 25, max 100).
+	 *     @type string $starting_after Cursor for pagination.
+	 *     @type array  $expand         Fields to expand.
+	 * }
+	 *
+	 * @return array{items: Subscription[], has_more: bool, cursor: string}|WP_Error
+	 */
+	public function list( array $params = [] ): array|WP_Error {
+		$client = $this->client->stripe();
+
+		if ( ! $client ) {
+			return new WP_Error( 'stripe_not_configured', __( 'Stripe client is not configured.', 'arraypress' ) );
+		}
+
+		try {
+			$args = [];
+
+			if ( isset( $params['status'] ) ) {
+				$args['status'] = $params['status'];
+			}
+
+			if ( isset( $params['price'] ) ) {
+				$args['price'] = $params['price'];
+			}
+
+			if ( isset( $params['customer'] ) ) {
+				$args['customer'] = $params['customer'];
+			}
+
+			if ( isset( $params['created'] ) ) {
+				$args['created'] = $params['created'];
+			}
+
+			if ( isset( $params['expand'] ) ) {
+				$args['expand'] = $params['expand'];
+			}
+
+			$args['limit'] = min( $params['limit'] ?? 25, 100 );
+
+			if ( ! empty( $params['starting_after'] ) ) {
+				$args['starting_after'] = $params['starting_after'];
+			}
+
+			$result = $client->subscriptions->all( $args );
+
+			$items  = $result->data;
+			$cursor = ! empty( $items ) ? end( $items )->id : '';
+
+			return [
+				'items'    => $items,
+				'has_more' => $result->has_more,
+				'cursor'   => $cursor,
+			];
+		} catch ( \Exception $e ) {
+			return new WP_Error( 'stripe_error', $e->getMessage() );
+		}
+	}
+
 	/** =========================================================================
 	 *  Webhook Data Extraction
 	 *  ======================================================================== */

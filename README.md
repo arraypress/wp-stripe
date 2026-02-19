@@ -11,9 +11,16 @@ over the Stripe PHP SDK with webhook handling, currency utilities, and convenien
 - 📦 Product and price management with WordPress integration
 - 🎟️ Coupon and promotion code helpers (simplified two-step flow)
 - 💳 Checkout session creation with auto-detection of payment vs subscription
+- 🔗 Payment Links for shareable, reusable purchase URLs
 - 🔄 Refund creation (full and partial) with auto-detection of payment intent vs charge
 - 🏦 Customer portal session management
 - 🛡️ Radar block/allow list management for fraud prevention
+- 🧩 Stripe Connect: Express accounts, onboarding, and transfers
+- ✨ Entitlement Features for product-based feature gating
+- 🎫 Active Entitlements for checking customer feature access
+- ⚖️ Tax rate management (manual tax collection)
+- 🚚 Shipping rate management for checkout
+- ⚔️ Dispute management with evidence submission
 - 💱 Currency utilities via arraypress/wp-currencies
 - 🔗 Stripe Dashboard URL generation
 - 🧩 Static helpers for formatting, parsing, validation, labels, and options
@@ -424,6 +431,7 @@ $page = $coupons->list_serialized();       // Same but plain stdClass objects
 ```php
 $coupons->delete( 'coupon_id' );              // true|WP_Error — existing discounts unaffected
 $coupons->deactivate_code( 'promo_xxx' );     // PromotionCode|WP_Error — coupon remains active
+$coupons->reactivate_code( 'promo_xxx' );     // PromotionCode|WP_Error — re-enables a deactivated code
 ```
 
 ---
@@ -529,6 +537,103 @@ $data = $checkout->get_completed_data( 'cs_xxx' );
 //                 quantity, total, unit_amount, currency, interval, interval_count
 //
 // discount: code, coupon_id, amount_off, percent_off
+```
+
+---
+
+## Payment Links
+
+`ArrayPress\Stripe\PaymentLinks`
+
+Shareable, reusable purchase URLs. Unlike Checkout Sessions (created per-customer on demand), Payment Links are created
+once and shared indefinitely via email, social media, QR codes, or invoices.
+
+```php
+use ArrayPress\Stripe\PaymentLinks;
+$links = new PaymentLinks( $client );
+```
+
+### Creation & Updates
+
+```php
+// Create a payment link
+$link = $links->create(
+    [ [ 'price' => 'price_xxx', 'quantity' => 1 ] ],
+    [
+        'after_completion'      => 'redirect',
+        'after_completion_data' => [ 'url' => home_url( '/thank-you/' ) ],
+        'allow_promotion_codes' => true,
+        'automatic_tax'         => [ 'enabled' => true ],
+        'metadata'              => [ 'source' => 'email_campaign' ],
+    ]
+);
+
+// All supported args:
+$link = $links->create( $line_items, [
+    'active'                      => true,
+    'after_completion'            => 'redirect',          // or 'hosted_confirmation'
+    'after_completion_data'       => [ 'url' => '...' ],  // or [ 'custom_message' => '...' ]
+    'allow_promotion_codes'       => true,
+    'automatic_tax'               => [ 'enabled' => true ],
+    'billing_address_collection'  => 'required',
+    'consent_collection'          => [],
+    'custom_fields'               => [],                   // up to 3
+    'custom_text'                 => [],
+    'invoice_creation'            => [ 'enabled' => true ],
+    'payment_method_collection'   => 'always',
+    'payment_method_types'        => [ 'card', 'klarna' ],
+    'phone_number_collection'     => [ 'enabled' => true ],
+    'restrictions'                => [ 'completed_sessions' => [ 'limit' => 100 ] ],
+    'shipping_address_collection' => [ 'allowed_countries' => [ 'US', 'GB' ] ],
+    'shipping_options'            => [ [ 'shipping_rate' => 'shr_xxx' ] ],
+    'subscription_data'           => [],
+    'tax_id_collection'           => [ 'enabled' => true ],
+    'transfer_data'               => [ 'destination' => 'acct_xxx' ],
+    'metadata'                    => [],
+] );
+
+// Update an existing link
+$links->update( 'plink_xxx', [
+    'active'                => true,
+    'allow_promotion_codes' => false,
+    'metadata'              => [ 'updated' => '1' ],
+] );
+```
+
+### Retrieval
+
+```php
+$link = $links->get( 'plink_xxx' ); // PaymentLink|WP_Error
+
+// Get line items for a payment link
+$items = $links->get_line_items( 'plink_xxx' );
+// Returns [ 'items' => LineItem[], 'has_more' => bool ] | WP_Error
+```
+
+### Listing
+
+```php
+// Paginated list
+$page = $links->list( [ 'active' => true, 'limit' => 25 ] );
+// Returns [ 'items' => PaymentLink[], 'has_more' => bool, 'cursor' => string ] | WP_Error
+
+// Active links as key/value for admin dropdowns
+$options = $links->get_options();
+// [ 'plink_xxx' => 'https://buy.stripe.com/...', ... ]
+
+// Find all links that include a specific price
+$matched = $links->list_by_price( 'price_xxx' );           // PaymentLink[]
+$matched = $links->list_by_price( 'price_xxx', false );    // includes inactive
+
+// Fetch ALL links (auto-paginating)
+$all = $links->all( [ 'active' => true ] );
+```
+
+### Status Management
+
+```php
+$links->activate( 'plink_xxx' );    // Sets active = true
+$links->deactivate( 'plink_xxx' );  // Sets active = false — customers see a deactivated page
 ```
 
 ---
@@ -948,98 +1053,320 @@ $result = $events->reprocess( 'evt_xxx', $webhooks ); // true|WP_Error
 
 ---
 
-## Radar (Block/Allow Lists)
+## Accounts (Stripe Connect)
 
-`ArrayPress\Stripe\Radar`
+`ArrayPress\Stripe\Accounts`
+
+Manages Stripe Connect Express connected accounts for affiliate and seller payouts. Handles account creation,
+Stripe-hosted onboarding, status checking, and account management.
 
 ```php
-use ArrayPress\Stripe\Radar;
-$radar = new Radar( $client );
+use ArrayPress\Stripe\Accounts;
+$accounts = new Accounts( $client );
 ```
 
-### Quick Block/Allow
+### Typical Onboarding Flow
+
+1. `create()` — Create the connected account
+2. `create_onboarding_link()` — Generate the Stripe-hosted onboarding URL
+3. Redirect affiliate to the URL
+4. Affiliate completes Stripe's onboarding (KYC, bank details, tax forms)
+5. Affiliate redirected to your `return_url`
+6. `is_ready()` — Check `charges_enabled` + `payouts_enabled`
+7. If not ready, `create_onboarding_link()` again (link is single-use)
+
+Once ready, use Transfers to send commission payments.
+
+### Creation & Retrieval
 
 ```php
-// Block — adds to Stripe's default lists
-$radar->block_email( 'fraud@example.com' );
-$radar->block_ip( '192.168.1.1' );
-$radar->block_customer( 'cus_xxx' );
-$radar->block_card( 'card_fingerprint_xxx' );
-$radar->block_country( 'NG' );   // two-letter ISO code
+// Create a new Express connected account
+$account = $accounts->create( [
+    'email'            => 'affiliate@example.com',
+    'country'          => 'US',          // default 'US'
+    'business_type'    => 'individual',  // or 'company'
+    'individual'       => [ 'first_name' => 'Jane', 'last_name' => 'Doe' ],
+    'business_profile' => [ 'url' => 'https://example.com' ],
+    'metadata'         => [ 'affiliate_id' => '42' ],
+    'capabilities'     => [ 'transfers' => [ 'requested' => true ] ],
+] );
 
-// Allow — adds to Stripe's default allow lists
-$radar->allow_email( 'vip@example.com' );
-$radar->allow_customer( 'cus_xxx' );
+// Retrieve
+$account = $accounts->get( 'acct_xxx' ); // Account|WP_Error
+
+// Update
+$accounts->update( 'acct_xxx', [
+    'email'    => 'new@example.com',
+    'metadata' => [ 'tier' => 'gold' ],
+] );
+
+// Delete (only if no active balance — use with extreme caution)
+$accounts->delete( 'acct_xxx' ); // true|WP_Error
+
+// Paginated list
+$page = $accounts->list( [ 'limit' => 25 ] );
+// Returns [ 'items' => Account[], 'has_more' => bool, 'cursor' => string ] | WP_Error
 ```
 
-### List Item Management
+### Onboarding
 
 ```php
-// Add to any list by alias constant or ID (rsl_xxx)
-$item = $radar->add_item( Radar::LIST_BLOCK_EMAIL, 'fraud@example.com' );
-$item = $radar->add_item( 'rsl_xxx', 'some_value' );
-
-// Remove an item by item ID (rsli_xxx)
-$radar->remove_item( 'rsli_xxx' ); // true|WP_Error
-
-// List items in a value list
-$result = $radar->list_items( Radar::LIST_BLOCK_EMAIL );
-$result = $radar->list_items( Radar::LIST_BLOCK_EMAIL, 50 ); // limit
-// Returns [ 'items' => ValueListItem[], 'has_more' => bool ] | WP_Error
-
-// Same but plain stdClass objects
-$result = $radar->list_items_serialized( Radar::LIST_BLOCK_IP );
-```
-
-### List Alias Constants
-
-```php
-Radar::LIST_BLOCK_EMAIL           // 'block_list_email'
-Radar::LIST_BLOCK_IP              // 'block_list_ip_address'
-Radar::LIST_BLOCK_CARD            // 'block_list_card_fingerprint'
-Radar::LIST_BLOCK_CARD_BIN        // 'block_list_card_bin'
-Radar::LIST_BLOCK_CUSTOMER        // 'block_list_customer_id'
-Radar::LIST_BLOCK_CARD_COUNTRY    // 'block_list_card_country'
-Radar::LIST_BLOCK_CLIENT_COUNTRY  // 'block_list_ip_country'
-Radar::LIST_BLOCK_CHARGE_DESC     // 'block_list_charge_description'
-Radar::LIST_ALLOW_EMAIL           // 'allow_list_email'
-Radar::LIST_ALLOW_IP              // 'allow_list_ip_address'
-Radar::LIST_ALLOW_CARD            // 'allow_list_card_fingerprint'
-Radar::LIST_ALLOW_CUSTOMER        // 'allow_list_customer_id'
-```
-
-### Custom List Management
-
-```php
-// Create a custom list
-$list = $radar->create_list(
-    'vip_emails',           // alias (referenced in Radar rules as @vip_emails)
-    'VIP Customers',        // display name
-    'email',                // item_type — see VALID_ITEM_TYPES below
-    [ 'source' => 'crm' ]  // optional metadata
+// Create a Stripe-hosted onboarding link (single-use, expires quickly)
+$link = $accounts->create_onboarding_link(
+    'acct_xxx',
+    home_url( '/affiliate/onboarding-complete/' ),  // return_url
+    home_url( '/affiliate/onboarding-refresh/' ),   // refresh_url (regenerate link here)
+    'account_onboarding'                             // or 'account_update' for existing accounts
 );
+wp_redirect( $link->url );
 
-// Valid item types:
-// 'card_fingerprint', 'card_bin', 'email', 'ip_address', 'country',
-// 'string', 'case_sensitive_string', 'customer_id',
-// 'sepa_debit_fingerprint', 'us_bank_account_fingerprint'
-
-$list = $radar->get_list( 'rsl_xxx' );       // ValueList|WP_Error
-
-$result = $radar->list_all();                // [ 'items' => ValueList[], 'has_more' => bool ] | WP_Error
-$result = $radar->list_all( [ 'alias' => 'vip_emails' ] );
-$result = $radar->list_all_serialized();     // plain stdClass objects
-
-$radar->delete_list( 'rsl_xxx' );           // true|WP_Error — list must not be in active rules
+// Convenience wrapper — returns just the URL
+$url = $accounts->get_onboarding_url(
+    'acct_xxx',
+    home_url( '/affiliate/onboarding-complete/' ),
+    home_url( '/affiliate/onboarding-refresh/' )
+);
+// string|WP_Error
 ```
+
+### Status Checking
+
+```php
+// Quick boolean check — is the account ready to receive payouts?
+$ready = $accounts->is_ready( 'acct_xxx' ); // bool|WP_Error
+
+// Detailed status summary for admin UI
+$status = $accounts->get_status( 'acct_xxx' );
+// Returns array|WP_Error:
+// account_id, charges_enabled, payouts_enabled, is_ready,
+// details_submitted, requirements (currently_due, eventually_due,
+// past_due, disabled_reason), email
+```
+
+---
+
+## Transfers (Stripe Connect)
+
+`ArrayPress\Stripe\Transfers`
+
+Sends commission payments from your platform balance to connected accounts. The connected account must be fully
+onboarded (`is_ready() = true`) before you can transfer to them.
+
+```php
+use ArrayPress\Stripe\Transfers;
+$transfers = new Transfers( $client );
+```
+
+### Creation & Retrieval
+
+```php
+// Transfer funds (amount in major units, auto-converted)
+$transfer = $transfers->create( 'acct_xxx', 49.99, 'USD', [
+    'description'        => 'January commission',
+    'transfer_group'     => 'commissions_2026_01',
+    'source_transaction' => 'ch_xxx',    // optional: tie to a specific charge
+    'metadata'           => [ 'affiliate_id' => '42' ],
+] );
+
+// Retrieve
+$transfer = $transfers->get( 'tr_xxx' ); // Transfer|WP_Error
+
+// Update metadata or description
+$transfers->update( 'tr_xxx', [
+    'description' => 'Updated description',
+    'metadata'    => [ 'adjusted' => 'true' ],
+] );
+```
+
+### Listing
+
+```php
+// Paginated list
+$page = $transfers->list( [ 'limit' => 25 ] );
+// Returns [ 'items' => Transfer[], 'has_more' => bool, 'cursor' => string ] | WP_Error
+
+// List by connected account
+$page = $transfers->list_by_account( 'acct_xxx' );
+
+// List by transfer group
+$page = $transfers->list_by_group( 'commissions_2026_01' );
+```
+
+### Reversals
+
+```php
+// Full reversal
+$reversal = $transfers->reverse( 'tr_xxx' ); // TransferReversal|WP_Error
+
+// Partial reversal ($10.00)
+$reversal = $transfers->reverse( 'tr_xxx', 10.00, 'USD', [
+    'description' => 'Partial clawback',
+    'metadata'    => [ 'reason' => 'order_cancelled' ],
+] );
+```
+
+### Bulk Payouts
+
+```php
+// Send commissions to multiple accounts in one call
+$result = $transfers->bulk_payout( [
+    [ 'account_id' => 'acct_aaa', 'amount' => 49.99, 'metadata' => [ 'affiliate' => '1' ] ],
+    [ 'account_id' => 'acct_bbb', 'amount' => 125.00 ],
+    [ 'account_id' => 'acct_ccc', 'amount' => 30.50 ],
+], 'USD', 'commissions_2026_02' );
+
+// Returns array:
+// $result['transfer_group'] — the group identifier
+// $result['succeeded']      — Transfer[] that completed
+// $result['failed']         — [ 'account_id', 'amount', 'error' (WP_Error) ]
+// $result['total_sent']     — total transferred in smallest unit
+```
+
+---
+
+## Features (Entitlement Features)
+
+`ArrayPress\Stripe\Features`
+
+Manages account-level feature definitions that can be attached to products. When a customer purchases a product with
+features attached, Stripe automatically creates active entitlements for those features.
+
+```php
+use ArrayPress\Stripe\Features;
+$features = new Features( $client );
+```
+
+### Feature Management
+
+```php
+// Create a feature (lookup_key is immutable after creation)
+$feature = $features->create( 'API Access', 'api_access', [
+    'metadata' => [ 'tier' => 'pro' ],
+] );
+
+// Retrieve
+$feature = $features->get( 'feat_xxx' ); // Feature|WP_Error
+
+// Update (only name and metadata — lookup_key is immutable)
+$features->update( 'feat_xxx', [
+    'name'     => 'Full API Access',
+    'metadata' => [ 'updated' => '1' ],
+] );
+
+// Archive (cannot be attached to new products; existing attachments unaffected)
+$features->archive( 'feat_xxx' ); // Feature|WP_Error
+```
+
+### Listing
+
+```php
+// Paginated list
+$page = $features->list( [ 'limit' => 25 ] );
+// Returns [ 'items' => Feature[], 'has_more' => bool, 'cursor' => string ] | WP_Error
+
+// Plain stdClass objects
+$page = $features->list_serialized();
+
+// Key/value for admin dropdowns
+$options = $features->get_options();
+// [ 'feat_xxx' => 'API Access (api_access)', ... ]
+```
+
+### Product Attachment
+
+```php
+// Attach a feature to a product
+$pf = $features->attach_to_product( 'prod_xxx', 'feat_xxx' );
+// Returns ProductFeature|WP_Error
+
+// Detach a feature from a product
+$features->detach_from_product( 'prod_xxx', 'pf_xxx' ); // true|WP_Error
+
+// List all features attached to a product
+$result = $features->list_by_product( 'prod_xxx' );
+// Returns [ 'items' => ProductFeature[], 'has_more' => bool, 'cursor' => string ] | WP_Error
+```
+
+### Bulk Retrieval
+
+```php
+// Fetch ALL features (auto-paginating)
+$all = $features->all();
+
+// Process in batches — return false from callback to stop early
+$total = $features->each_batch( function( $items, $page ) {
+    foreach ( $items as $feature ) { /* sync */ }
+} );
+```
+
+---
+
+## Entitlements (Active Entitlements)
+
+`ArrayPress\Stripe\Entitlements`
+
+Read-only class for querying which features a customer currently has access to. Entitlements are managed automatically
+by
+Stripe — they are created when a customer purchases a product with features attached, and removed when a subscription
+lapses.
+
+**Performance note:** Stripe recommends persisting active entitlements in your own database rather than querying this
+API
+on every request. Sync them via the `customer.entitlement.active_entitlement_summary.updated` webhook event.
+
+```php
+use ArrayPress\Stripe\Entitlements;
+$entitlements = new Entitlements( $client );
+```
+
+### Querying
+
+```php
+// List all active entitlements for a customer
+$result = $entitlements->list_by_customer( 'cus_xxx' );
+// Returns [ 'items' => ActiveEntitlement[], 'has_more' => bool, 'cursor' => string ] | WP_Error
+
+// Retrieve a single entitlement
+$entitlement = $entitlements->get( 'ent_xxx' ); // ActiveEntitlement|WP_Error
+
+// Get all lookup keys (the value you want to persist in your DB)
+$keys = $entitlements->get_lookup_keys( 'cus_xxx' );
+// Returns string[]|WP_Error — e.g. [ 'api_access', 'priority_support' ]
+```
+
+### Feature Access Checks
+
+```php
+// Check a single feature
+$has = $entitlements->has_feature( 'cus_xxx', 'api_access' ); // bool|WP_Error
+
+// Check ALL features (must have every one)
+$has = $entitlements->has_all_features( 'cus_xxx', [ 'api_access', 'priority_support' ] );
+
+// Check ANY feature (must have at least one)
+$has = $entitlements->has_any_feature( 'cus_xxx', [ 'api_access', 'priority_support' ] );
+```
+
+### Database Sync
+
+```php
+// Get a summary suitable for persisting against a user record
+$summary = $entitlements->get_summary( 'cus_xxx' );
+// Returns array|WP_Error:
+// customer_id, lookup_keys (string[]), count, updated_at (Unix timestamp)
+```
+
+---
 
 ## Tax Rates
 
 `ArrayPress\Stripe\TaxRates`
 
-Manages manual tax rates for applying to checkout sessions and invoices. For fully automatic tax collection, pass `automatic_tax: [ 'enabled' => true ]` in your Checkout session instead — no rate management needed in that flow.
+Manages manual tax rates for applying to checkout sessions and invoices. For fully automatic tax collection, pass
+`automatic_tax: [ 'enabled' => true ]` in your Checkout session instead — no rate management needed in that flow.
 
-Note: Once created, a tax rate's `percentage` and `inclusive` flag are immutable. Use `replace()` to correct either value.
+Note: Once created, a tax rate's `percentage` and `inclusive` flag are immutable. Use `replace()` to correct either
+value.
 
 ```php
 use ArrayPress\Stripe\TaxRates;
@@ -1053,7 +1380,7 @@ $tax_rates = new TaxRates( $client );
 $rate = $tax_rates->create( [
     'display_name' => 'Sales Tax',
     'percentage'   => 8.5,
-    'inclusive'    => false,
+    'inclusive'     => false,
     'country'      => 'US',
     'state'        => 'CA',
     'jurisdiction' => 'California',
@@ -1065,7 +1392,7 @@ $rate = $tax_rates->create( [
 $rate = $tax_rates->create( [
     'display_name' => 'VAT',
     'percentage'   => 20.0,
-    'inclusive'    => true,
+    'inclusive'     => true,
     'country'      => 'GB',
     'jurisdiction' => 'UK VAT',
     'tax_type'     => 'vat',
@@ -1124,349 +1451,573 @@ $options = $tax_rates->get_options( true );     // inclusive only
 ### Updates & Status Management
 
 ```php
-// Update mutable fields only (display_name, jurisdiction, description, metadata, active)
+// Update (only display_name, description, jurisdiction, metadata, and active are mutable)
 $tax_rates->update( 'txr_xxx', [
-    'display_name' => 'EU VAT',
-    'jurisdiction' => 'European Union',
-    'metadata'     => [ 'updated' => '1' ],
+    'display_name' => 'Updated Tax',
+    'description'  => 'Updated sales tax for CA',
+    'jurisdiction' => 'California',
+    'metadata'     => [ 'updated' => 'true' ],
+    'active'       => true,
 ] );
 
-// Archive — prevents future use, existing transactions unaffected
-$tax_rates->archive( 'txr_xxx' );   // TaxRate|WP_Error
-
-// Unarchive — makes a previously archived rate active again
-$tax_rates->unarchive( 'txr_xxx' ); // TaxRate|WP_Error
+// Archive / Unarchive
+$tax_rates->archive( 'txr_xxx' );   // Sets active = false
+$tax_rates->unarchive( 'txr_xxx' ); // Sets active = true
 ```
 
-### Replacement
+### Tax Rate Replacement
 
 ```php
-// Archive old rate + create corrected copy in one call
-// (required when percentage or inclusive need changing — both are immutable)
+// Since percentage and inclusive are immutable, replace creates a new rate and archives the old
 $result = $tax_rates->replace( 'txr_old', [
-    'percentage' => 23.0,   // corrected value
+    'display_name' => 'Updated VAT',
+    'percentage'   => 21.0,
+    'inclusive'     => true,
+    'country'      => 'GB',
+    'jurisdiction' => 'UK VAT',
+    'tax_type'     => 'vat',
 ] );
-// Omitted fields are copied from the old rate automatically
-
 // $result['new_rate'] — the new TaxRate object
 // $result['old_rate'] — the archived old TaxRate object
-// Returns WP_Error with code 'partial_replace' if new was created but old could not be archived
 ```
 
 ### Bulk Retrieval
 
 ```php
-// Fetch ALL rates (auto-paginating)
+// Fetch ALL tax rates (auto-paginating)
 $all = $tax_rates->all( [ 'active' => true ] );
 
-// Process in batches — return false from callback to stop early
+// Process in batches
 $total = $tax_rates->each_batch( function( $items, $page ) {
     foreach ( $items as $rate ) { /* sync */ }
 }, [ 'active' => true ] );
-// Returns int (total processed) | WP_Error
 ```
 
 ---
 
-## Dashboard URLs
+## Shipping Rates
 
-`ArrayPress\Stripe\Dashboard` — all static methods
+`ArrayPress\Stripe\ShippingRates`
+
+Manages shipping rate options for Checkout sessions. Shipping rates can be one-time fixed amounts or free, and are
+passed via the `shipping_options` parameter when creating a Checkout session.
 
 ```php
-use ArrayPress\Stripe\Dashboard;
+use ArrayPress\Stripe\ShippingRates;
+$shipping = new ShippingRates( $client );
+```
 
-// Generic URL builder
-Dashboard::url( 'products', 'prod_xxx', true );  // test mode
-// https://dashboard.stripe.com/test/products/prod_xxx
+### Creation
 
-// Resource-specific helpers (all accept $id, $is_test = false)
-Dashboard::product( 'prod_xxx', true );
-Dashboard::price( 'price_xxx' );
-Dashboard::customer( 'cus_xxx' );
-Dashboard::payment( 'pi_xxx' );
-Dashboard::subscription( 'sub_xxx' );
-Dashboard::invoice( 'in_xxx' );
-Dashboard::coupon( 'coupon_xxx' );
+```php
+// Fixed amount shipping rate (amount in major units, auto-converted)
+$rate = $shipping->create( [
+    'display_name' => 'Standard Shipping',
+    'amount'       => 5.99,
+    'currency'     => 'USD',
+    'type'         => 'fixed_amount',   // currently the only type
+    'metadata'     => [ 'speed' => 'standard' ],
+] );
+
+// Free shipping
+$rate = $shipping->create( [
+    'display_name'         => 'Free Shipping',
+    'amount'               => 0,
+    'currency'             => 'USD',
+    'delivery_estimate'    => [
+        'minimum' => [ 'unit' => 'business_day', 'value' => 5 ],
+        'maximum' => [ 'unit' => 'business_day', 'value' => 7 ],
+    ],
+    'tax_behavior'         => 'exclusive',  // 'exclusive', 'inclusive', 'unspecified'
+    'tax_code'             => 'txcd_92010001',
+] );
+
+// Use in checkout:
+$checkout->create( $line_items, [
+    'shipping_options' => [
+        [ 'shipping_rate' => $rate->id ],
+    ],
+] );
+```
+
+### Retrieval
+
+```php
+$rate = $shipping->get( 'shr_xxx' ); // ShippingRate|WP_Error
+
+// Paginated list
+$page = $shipping->list( [ 'active' => true, 'limit' => 25 ] );
+// Returns [ 'items' => ShippingRate[], 'has_more' => bool, 'cursor' => string ] | WP_Error
+
+// Plain stdClass objects
+$page = $shipping->list_serialized( [ 'active' => true ] );
+
+// Key/value for admin dropdowns
+$options = $shipping->get_options();
+// [ 'shr_xxx' => 'Standard Shipping ($5.99 USD)', ... ]
+```
+
+### Updates & Status Management
+
+```php
+// Update (only display_name, metadata, active, tax_behavior are mutable)
+$shipping->update( 'shr_xxx', [
+    'display_name' => 'Express Shipping',
+    'metadata'     => [ 'speed' => 'express' ],
+    'active'       => true,
+] );
+
+// Archive / Unarchive
+$shipping->archive( 'shr_xxx' );   // Sets active = false
+$shipping->unarchive( 'shr_xxx' ); // Sets active = true
+```
+
+### Bulk Retrieval
+
+```php
+// Fetch ALL shipping rates (auto-paginating)
+$all = $shipping->all( [ 'active' => true ] );
+
+// Process in batches
+$total = $shipping->each_batch( function( $items, $page ) {
+    foreach ( $items as $rate ) { /* sync */ }
+}, [ 'active' => true ] );
 ```
 
 ---
 
-## Format
+## Disputes
 
-`ArrayPress\Stripe\Format` — all static methods
+`ArrayPress\Stripe\Disputes`
 
-Combines currency formatting (via `arraypress/wp-currencies`) with Stripe billing interval data.
+Manages chargebacks and payment disputes. When a customer disputes a payment with their bank, Stripe creates a Dispute
+object. You can submit evidence to fight the dispute, or close it to accept the chargeback.
 
 ```php
-use ArrayPress\Stripe\Format;
+use ArrayPress\Stripe\Disputes;
+$disputes = new Disputes( $client );
+```
 
-// Format amount in smallest currency unit
-Format::price( 999, 'USD' );                          // "$9.99"
-Format::price( 999, 'USD', 'de_DE' );                 // locale-aware: "9,99 $" (requires PHP intl)
+### Retrieval
 
-// Format with recurring interval suffix
-Format::price_with_interval( 999, 'USD', 'month' );           // "$9.99 per month"
-Format::price_with_interval( 999, 'USD', 'month', 3 );        // "$9.99 every 3 months"
-Format::price_with_interval( 999, 'USD', null );               // "$9.99" (no interval)
-Format::price_with_interval( 999, 'USD', 'year', 1, 'fr_FR' ); // locale-aware
+```php
+$dispute = $disputes->get( 'dp_xxx' ); // Dispute|WP_Error
 
-// Format directly from a Stripe price object or line item object
-// Compatible with: Stripe\Price, line items, subscription items, invoice lines, stdClass equivalents
-Format::price_from_object( $price );                           // string|null
-Format::price_from_object( $price, 'GBP' );                   // currency override
-Format::price_from_object( $price, '', 'month', 1 );          // interval override
+// Paginated list
+$page = $disputes->list( [ 'limit' => 25 ] );
+// Returns [ 'items' => Dispute[], 'has_more' => bool, 'cursor' => string ] | WP_Error
 
-// Wrapped in <span class="price">
-Format::price_html( $price );                                  // string|null
-Format::price_html( $price, 'EUR', 'year' );
+// Filter by charge or payment intent
+$page = $disputes->list_by_charge( 'ch_xxx' );
+$page = $disputes->list_by_payment_intent( 'pi_xxx' );
+
+// Disputes needing a response (status = 'needs_response')
+$page = $disputes->list_needs_response( 25 );
+```
+
+### Evidence Management
+
+```php
+// Stage evidence (save without submitting — lets you build incrementally)
+$disputes->stage_evidence( 'dp_xxx', [
+    'customer_name'          => 'Jane Doe',
+    'customer_email_address' => 'jane@example.com',
+    'product_description'    => 'Premium Plan — annual subscription',
+    'uncategorized_text'     => 'Customer accessed the product on 6 separate occasions...',
+] );
+
+// Submit evidence (finalises and sends to card network — IRREVERSIBLE)
+$disputes->submit_evidence( 'dp_xxx', [
+    'customer_name'          => 'Jane Doe',
+    'customer_email_address' => 'jane@example.com',
+    'product_description'    => 'Premium Plan — annual subscription',
+    'uncategorized_text'     => 'Customer accessed the product on 6 separate occasions...',
+] );
+
+// Evidence fields (all optional — submit what you have):
+// customer_name, customer_email_address, customer_purchase_ip,
+// product_description, uncategorized_text,
+// billing_address, shipping_address, shipping_date, shipping_carrier, shipping_tracking_number,
+// receipt, refund_policy, refund_policy_disclosure, refund_refusal_explanation,
+// cancellation_policy, cancellation_policy_disclosure, cancellation_rebuttal,
+// access_activity_log, service_date, service_documentation,
+// customer_communication, duplicate_charge_documentation, duplicate_charge_explanation,
+// duplicate_charge_id
+```
+
+### Close a Dispute
+
+```php
+// Accept the chargeback — funds returned to customer permanently
+$disputes->close( 'dp_xxx' ); // Dispute|WP_Error
+```
+
+### Webhook Data Extraction
+
+```php
+// In a charge.dispute.created handler
+$data = $disputes->get_event_data( $event );
+// Returns array: dispute_id, charge_id, payment_intent_id, amount,
+//                currency, reason, status, evidence_due_by, is_test
 ```
 
 ---
 
-## Labels
+## Radar (Fraud Prevention)
 
-`ArrayPress\Stripe\Labels` — all static methods
+`ArrayPress\Stripe\Radar`
 
-Human-readable display strings for billing intervals.
+Manages Stripe Radar block and allow lists for fraud prevention.
 
 ```php
-use ArrayPress\Stripe\Labels;
+use ArrayPress\Stripe\Radar;
+$radar = new Radar( $client );
+```
 
-// Standalone label (for dropdowns, status badges)
-Labels::get_billing_label( 'month' );        // "Monthly"
-Labels::get_billing_label( 'year' );         // "Yearly"
-Labels::get_billing_label( 'day' );          // "Daily"
-Labels::get_billing_label( 'week' );         // "Weekly"
-Labels::get_billing_label( 'month', 3 );     // "Every 3 months"
-Labels::get_billing_label( 'year', 2 );      // "Every 2 years"
+### Block Lists
 
-// Short suffix for compact price displays (e.g., "$9.99/mo")
-Labels::get_billing_suffix( 'month' );       // "/mo"
-Labels::get_billing_suffix( 'year' );        // "/yr"
-Labels::get_billing_suffix( 'day' );         // "/day"
-Labels::get_billing_suffix( 'week' );        // "/wk"
-Labels::get_billing_suffix( 'month', 3 );    // "/3 mo"
+```php
+// Block by email
+$radar->block_email( 'fraud@example.com' );
 
-// Suffix-style text to append to a price (for storefront display)
-Labels::get_interval_text( 'month' );        // "per month"
-Labels::get_interval_text( 'year' );         // "per year"
-Labels::get_interval_text( 'day' );          // "per day"
-Labels::get_interval_text( 'week' );         // "per week"
-Labels::get_interval_text( 'month', 3 );     // "every 3 months"
-Labels::get_interval_text( 'year', 2 );      // "every 2 years"
+// Block by card fingerprint (from payment details)
+$radar->block_card( 'card_fingerprint_xxx' );
+
+// Block by IP address (IPv4 or IPv6)
+$radar->block_ip( '198.51.100.42' );
+
+// Block by customer ID
+$radar->block_customer( 'cus_xxx' );
+```
+
+### Allow Lists
+
+```php
+// Allow by email
+$radar->allow_email( 'vip@example.com' );
+
+// Allow by card fingerprint
+$radar->allow_card( 'card_fingerprint_xxx' );
+
+// Allow by customer ID
+$radar->allow_customer( 'cus_xxx' );
+```
+
+### List Management
+
+```php
+// Check if a value is blocked or allowed
+$radar->is_blocked( 'fraud@example.com', 'email' );  // bool|WP_Error
+$radar->is_allowed( 'vip@example.com', 'email' );    // bool|WP_Error
+
+// List items
+$page = $radar->list_blocked( 'email', 25 );          // ValueListItem[]|WP_Error
+$page = $radar->list_allowed( 'email', 25 );           // ValueListItem[]|WP_Error
+
+// Remove from list
+$radar->remove_blocked( 'fraud@example.com', 'email' );  // true|WP_Error
+$radar->remove_allowed( 'vip@example.com', 'email' );    // true|WP_Error
 ```
 
 ---
 
-## Options
+## Static Utility Classes
 
-`ArrayPress\Stripe\Options` — all static methods
+The following classes in `ArrayPress\Stripe\Helpers\` are stateless and require no client instance. They provide
+formatting, validation, label generation, and option arrays for building admin UIs.
 
-Pre-built `key => label` arrays for use in admin dropdowns and form inputs.
+### Format
+
+`ArrayPress\Stripe\Helpers\Format`
 
 ```php
-use ArrayPress\Stripe\Options;
+use ArrayPress\Stripe\Helpers\Format;
+
+// Currency formatting (uses arraypress/wp-currencies)
+Format::amount( 1999, 'USD' );          // '$19.99'
+Format::amount( 1999, 'JPY' );          // '¥1,999' (zero-decimal currency)
+Format::zero_decimal( 19.99, 'USD' );   // 1999 (convert major → minor units)
+Format::zero_decimal( 1999, 'JPY' );    // 1999 (already in minor units)
+Format::from_zero_decimal( 1999, 'USD' ); // 19.99 (minor → major)
+
+// Interval / billing cycle
+Format::interval( 'month', 1 );         // 'Monthly'
+Format::interval( 'month', 3 );         // 'Every 3 months'
+Format::interval( 'year', 1 );          // 'Yearly'
+
+// Price display (combines amount + interval)
+Format::price_amount( 1999, 'USD', 'month', 1 );   // '$19.99 / month'
+Format::price_amount( 9999, 'USD', 'year', 1 );    // '$99.99 / year'
+Format::price_amount( 999, 'USD' );                 // '$9.99' (one-time)
+
+// Stripe object formatting
+Format::card( 'visa', '4242' );          // 'Visa ending in 4242'
+Format::card( 'amex', '1234' );          // 'American Express ending in 1234'
+Format::status( 'active' );              // 'Active'
+Format::status( 'past_due' );            // 'Past Due'
+Format::dispute_reason( 'fraudulent' );  // 'Fraudulent'
+Format::dispute_status( 'needs_response' ); // 'Needs Response'
+
+// Date helpers
+Format::timestamp( 1717200000 );         // '2025-06-01 00:00:00' (Y-m-d H:i:s)
+Format::timestamp( 1717200000, 'M j, Y' ); // 'Jun 1, 2025'
+Format::period( 1717200000, 1719878400 ); // 'Jun 1, 2025 – Jul 2, 2025'
+```
+
+### Validate
+
+`ArrayPress\Stripe\Helpers\Validate`
+
+```php
+use ArrayPress\Stripe\Helpers\Validate;
+
+// ID format validation
+Validate::id( 'cus_xxx', 'cus' );    // true
+Validate::id( 'invalid', 'cus' );    // false
+
+// Detect ID type from prefix
+Validate::get_id_type( 'cus_xxx' );    // 'customer'
+Validate::get_id_type( 'sub_xxx' );    // 'subscription'
+Validate::get_id_type( 'pi_xxx' );     // 'payment_intent'
+Validate::get_id_type( 'ch_xxx' );     // 'charge'
+Validate::get_id_type( 'in_xxx' );     // 'invoice'
+Validate::get_id_type( 'prod_xxx' );   // 'product'
+Validate::get_id_type( 'price_xxx' );  // 'price'
+Validate::get_id_type( 'pm_xxx' );     // 'payment_method'
+Validate::get_id_type( 'evt_xxx' );    // 'event'
+Validate::get_id_type( 'cs_xxx' );     // 'checkout_session'
+Validate::get_id_type( 'dp_xxx' );     // 'dispute'
+Validate::get_id_type( 'plink_xxx' );  // 'payment_link'
+Validate::get_id_type( 'acct_xxx' );   // 'account'
+Validate::get_id_type( 'tr_xxx' );     // 'transfer'
+Validate::get_id_type( 'shr_xxx' );    // 'shipping_rate'
+Validate::get_id_type( 'txr_xxx' );    // 'tax_rate'
+Validate::get_id_type( 'feat_xxx' );   // 'feature'
+Validate::get_id_type( 'unknown' );    // null
+
+// Key format validation
+Validate::secret_key( 'sk_test_xxx' );       // true
+Validate::publishable_key( 'pk_live_xxx' );  // true
+Validate::webhook_secret( 'whsec_xxx' );     // true
+
+// Stripe object type checks
+Validate::is_payment_intent( 'pi_xxx' );  // true
+Validate::is_charge( 'ch_xxx' );          // true
+```
+
+### Labels
+
+`ArrayPress\Stripe\Helpers\Labels`
+
+Human-readable labels for Stripe constants — useful for admin tables and dropdowns.
+
+```php
+use ArrayPress\Stripe\Helpers\Labels;
+
+// Status labels
+Labels::subscription_status( 'past_due' );   // 'Past Due'
+Labels::invoice_status( 'uncollectible' );   // 'Uncollectible'
+Labels::payment_status( 'requires_action' ); // 'Requires Action'
+Labels::dispute_status( 'needs_response' );  // 'Needs Response'
+Labels::dispute_reason( 'product_not_received' ); // 'Product Not Received'
 
 // Billing intervals
-Options::intervals();                   // [ 'day' => 'Daily', 'week' => ..., 'month' => ..., 'year' => ... ]
-Options::intervals( true );             // prepends 'one_time' => 'One-Time'
+Labels::get_interval_text( 'month', 1 );     // 'Monthly'
+Labels::get_interval_text( 'year', 1 );      // 'Yearly'
+Labels::get_interval_text( 'week', 2 );      // 'Every 2 weeks'
 
-// Price types
-Options::price_types();
-// [ 'one_time' => 'One-Time', 'recurring' => 'Recurring' ]
+// Duration labels
+Labels::duration( 'once' );                  // 'Once'
+Labels::duration( 'repeating' );             // 'Repeating'
+Labels::duration( 'forever' );               // 'Forever'
 
-// Coupon durations
-Options::coupon_durations();
-// [ 'once' => 'Once', 'repeating' => 'Repeating', 'forever' => 'Forever' ]
+// Card brands
+Labels::card_brand( 'visa' );                // 'Visa'
+Labels::card_brand( 'amex' );                // 'American Express'
+
+// Tax types
+Labels::tax_type( 'vat' );                   // 'VAT'
+Labels::tax_type( 'sales_tax' );             // 'Sales Tax'
+Labels::tax_type( 'gst' );                   // 'GST'
+```
+
+### Options
+
+`ArrayPress\Stripe\Helpers\Options`
+
+Pre-built key/value arrays for `<select>` dropdowns in WordPress admin pages. All methods return
+`[ 'value' => 'Label' ]`
+arrays.
+
+```php
+use ArrayPress\Stripe\Helpers\Options;
+
+// Intervals
+Options::intervals();               // [ 'day' => 'Daily', 'week' => 'Weekly', ... ]
 
 // Subscription statuses
-Options::subscription_statuses();
-// trialing, active, past_due, unpaid, paused, canceled, incomplete, incomplete_expired
-Options::subscription_statuses( true ); // prepends '' => 'All Statuses'
+Options::subscription_statuses();   // [ 'active' => 'Active', 'past_due' => 'Past Due', ... ]
 
 // Invoice statuses
-Options::invoice_statuses();
-// draft, open, paid, uncollectible, void
-Options::invoice_statuses( true );      // prepends '' => 'All Statuses'
+Options::invoice_statuses();        // [ 'draft' => 'Draft', 'open' => 'Open', ... ]
 
-// Charge statuses
-Options::charge_statuses();
-// succeeded, pending, failed
-Options::charge_statuses( true );       // prepends '' => 'All Statuses'
+// Payment method types
+Options::payment_method_types();    // [ 'card' => 'Card', 'sepa_debit' => 'SEPA Debit', ... ]
 
-// Simplified tax categories (maps human labels to Stripe tax codes)
-Options::tax_categories();
-// e.g. [ 'txcd_10103000' => 'Software as a Service (SaaS) - Personal Use', ... ]
+// Currencies (via arraypress/wp-currencies)
+Options::currencies();              // [ 'USD' => 'US Dollar', 'EUR' => 'Euro', ... ]
+Options::zero_decimal_currencies(); // [ 'JPY' => 'Japanese Yen', ... ]
 
-// Tax codes approved for Stripe Managed Payments (use instead of tax_categories() when Managed Payments is enabled)
-Options::managed_payments_tax_codes();
-// e.g. [ 'txcd_10201000' => 'Video Games - Downloaded - Non Subscription - Permanent Rights', ... ]
+// Tax types
+Options::tax_types();               // [ 'vat' => 'VAT', 'gst' => 'GST', ... ]
+
+// Tax behaviors
+Options::tax_behaviors();           // [ 'exclusive' => 'Exclusive', 'inclusive' => 'Inclusive', ... ]
+
+// Refund reasons
+Options::refund_reasons();          // [ 'duplicate' => 'Duplicate', ... ]
+
+// Coupon durations
+Options::coupon_durations();        // [ 'once' => 'Once', 'repeating' => 'Repeating', 'forever' => 'Forever' ]
+
+// Card brands
+Options::card_brands();             // [ 'visa' => 'Visa', 'mastercard' => 'Mastercard', ... ]
+
+// Dispute statuses
+Options::dispute_statuses();        // [ 'needs_response' => 'Needs Response', ... ]
+
+// Dispute reasons
+Options::dispute_reasons();         // [ 'fraudulent' => 'Fraudulent', ... ]
+
+// Proration behaviors
+Options::proration_behaviors();     // [ 'create_prorations' => 'Create Prorations', ... ]
 ```
 
----
+### Dashboard
 
-## Parse
+`ArrayPress\Stripe\Helpers\Dashboard`
 
-`ArrayPress\Stripe\Parse` — all static methods
-
-Extracts and normalises values from Stripe API objects or flat DB row objects. All methods accept live SDK objects or
-plain `stdClass` objects interchangeably.
+Generates direct links to Stripe Dashboard pages — respects test/live mode.
 
 ```php
-use ArrayPress\Stripe\Parse;
+use ArrayPress\Stripe\Helpers\Dashboard;
+
+// Object links — all accept optional $test_mode bool (default true)
+Dashboard::customer( 'cus_xxx' );          // https://dashboard.stripe.com/test/customers/cus_xxx
+Dashboard::subscription( 'sub_xxx' );      // ...subscriptions/sub_xxx
+Dashboard::invoice( 'in_xxx' );            // ...invoices/in_xxx
+Dashboard::payment_intent( 'pi_xxx' );     // ...payments/pi_xxx
+Dashboard::product( 'prod_xxx' );          // ...products/prod_xxx
+Dashboard::price( 'price_xxx' );           // ...prices/price_xxx
+Dashboard::coupon( 'coupon_id' );          // ...coupons/coupon_id
+Dashboard::event( 'evt_xxx' );             // ...events/evt_xxx
+Dashboard::refund( 'ref_xxx' );            // ...refunds/ref_xxx (actually payments/ref_xxx)
+Dashboard::charge( 'ch_xxx' );             // ...payments/ch_xxx
+Dashboard::tax_rate( 'txr_xxx' );          // ...tax-rates/txr_xxx
+Dashboard::shipping_rate( 'shr_xxx' );     // ...shipping-rates/shr_xxx
+Dashboard::feature( 'feat_xxx' );          // ...entitlements/features/feat_xxx
+Dashboard::dispute( 'dp_xxx' );            // ...disputes/dp_xxx
+Dashboard::payment_link( 'plink_xxx' );    // ...payment-links/plink_xxx
+Dashboard::transfer( 'tr_xxx' );           // ...connect/transfers/tr_xxx
+Dashboard::connect_account( 'acct_xxx' );  // ...connect/accounts/acct_xxx
+
+// Section links
+Dashboard::customers();                    // ...customers
+Dashboard::subscriptions();                // ...subscriptions
+Dashboard::invoices();                     // ...invoices
+Dashboard::products();                     // ...products
+Dashboard::coupons();                      // ...coupons
+Dashboard::events();                       // ...events
+Dashboard::webhooks();                     // ...webhooks
+Dashboard::api_keys();                     // ...apikeys
+Dashboard::payments();                     // ...payments
+
+// Auto-detect from any Stripe ID
+Dashboard::link( 'cus_xxx' );             // Customer link
+Dashboard::link( 'sub_xxx' );             // Subscription link
+Dashboard::link( 'pi_xxx' );              // Payment Intent link
+Dashboard::link( 'dp_xxx' );              // Dispute link
+
+// Live mode
+Dashboard::customer( 'cus_xxx', false );   // https://dashboard.stripe.com/customers/cus_xxx
 ```
 
-### Images
+### Utilities
+
+`ArrayPress\Stripe\Helpers\Utilities`
+
+General-purpose helpers.
 
 ```php
-Parse::product_image( $product );    // string — first image URL or ''
-Parse::product_images( $product );   // string[] — all image URLs or []
-```
+use ArrayPress\Stripe\Helpers\Utilities;
 
-### Features
+// Interval formatting (also available via Labels::get_interval_text)
+Utilities::get_interval_text( 'month', 1 );  // 'Monthly'
+Utilities::get_interval_text( 'year', 1 );   // 'Yearly'
 
-```php
-Parse::product_features( $product );      // string[] — marketing feature names
-Parse::product_features_json( $product ); // string|null — JSON-encoded, null if empty
-```
+// Generate a unique idempotency key (useful for retryable API calls)
+Utilities::idempotency_key();                // 'stripe_663a1f2e3b4c5'
 
-### Metadata
-
-```php
-Parse::metadata( $item );       // array — key/value pairs, empty array if none
-Parse::metadata_json( $item );  // string|null — JSON-encoded, null if empty
-```
-
-### Currency
-
-```php
-// Resolves in priority order: direct currency → price->currency → price_data->currency → $default
-Parse::currency( $item );           // string — uppercase ISO code, e.g. 'USD'
-Parse::currency( $item, 'EUR' );    // with custom default
-```
-
-### Recurring / Interval
-
-```php
-// For Stripe API price objects
-Parse::interval( $price );           // string|null — 'day', 'week', 'month', 'year', or null
-Parse::interval_count( $price );     // int|null
-
-// Resolves both from any object shape (DB row, API price, line item, subscription item)
-Parse::interval_data( $item );
-// Returns [ 'interval' => string|null, 'interval_count' => int ]
-// Handles: flat DB rows (recurring_interval column), nested price->recurring,
-//          inline price_data->recurring, direct recurring property
-
-// Check if a price is recurring
-Parse::is_recurring( $price ); // bool
-```
-
----
-
-## Validate
-
-`ArrayPress\Stripe\Validate` — all static methods
-
-Boolean validation helpers for Stripe IDs, API keys, and URLs.
-
-```php
-use ArrayPress\Stripe\Validate;
-
-// Stripe IDs (format check only — does not verify ID exists in Stripe)
-Validate::is_valid_id( 'prod_abc123' );           // bool
-Validate::is_valid_id( 'prod_abc123', 'prod_' );  // bool — also checks prefix
-
-// Identify resource type from ID prefix
-Validate::get_id_type( 'prod_xxx' );    // 'product'
-Validate::get_id_type( 'pi_xxx' );      // 'payment_intent'
-Validate::get_id_type( 'cs_xxx' );      // 'checkout_session'
-Validate::get_id_type( 'cus_xxx' );     // 'customer'
-Validate::get_id_type( 'sub_xxx' );     // 'subscription'
-Validate::get_id_type( 'si_xxx' );      // 'subscription_item'
-Validate::get_id_type( 'ch_xxx' );      // 'charge'
-Validate::get_id_type( 'in_xxx' );      // 'invoice'
-Validate::get_id_type( 'ii_xxx' );      // 'invoice_item'
-Validate::get_id_type( 're_xxx' );      // 'refund'
-Validate::get_id_type( 'evt_xxx' );     // 'event'
-Validate::get_id_type( 'pm_xxx' );      // 'payment_method'
-Validate::get_id_type( 'seti_xxx' );    // 'setup_intent'
-Validate::get_id_type( 'promo_xxx' );   // 'promotion_code'
-Validate::get_id_type( 'bps_xxx' );     // 'portal_session'
-Validate::get_id_type( 'dp_xxx' );      // 'dispute'
-Validate::get_id_type( 'acct_xxx' );    // 'account'
-Validate::get_id_type( 'plink_xxx' );   // 'payment_link'
-// Returns null for unrecognised prefixes
-
-// API key mode checks
-Validate::is_test_key( 'sk_test_xxx' ); // bool
-Validate::is_test_key( 'pk_test_xxx' ); // bool
-Validate::is_live_key( 'sk_live_xxx' ); // bool
-Validate::is_live_key( 'pk_live_xxx' ); // bool
-
-// URL accessibility (Stripe requires public URLs for product images)
-Validate::is_public_url( $url );
-// Returns false for: localhost, 127.0.0.1, ::1, 10.x.x.x, 172.16-31.x.x,
-//                    192.168.x.x, *.local, *.test
-```
-
----
-
-## Utilities
-
-`ArrayPress\Stripe\Utilities` — static methods
-
-```php
-use ArrayPress\Stripe\Utilities;
-
-// Determine image file extension from an HTTP response
-// Checks Content-Type header first, then binary-inspects body via finfo
-$extension = Utilities::get_image_extension( $response, $body );
-// Returns 'jpg', 'png', 'gif', 'webp', or 'svg' — defaults to 'jpg'
-// $response = WP_HTTP API response array, $body = raw response body string
-```
-
----
-
-## Currency (via arraypress/wp-currencies)
-
-```php
-use ArrayPress\Currencies\Currency;
-
-// Format amount (input in smallest unit — cents, pence, etc.)
-Currency::format( 999, 'USD' );                             // "$9.99"
-Currency::format( 1000, 'JPY' );                            // "¥1,000"
-Currency::format_localized( 999, 'EUR', 'de_DE' );          // "9,99 €"
-Currency::format_with_interval( 999, 'USD', 'month' );      // "$9.99 per month"
-
-// Convert between decimal and Stripe units
-Currency::to_smallest_unit( 9.99, 'USD' );    // 999  (int)
-Currency::from_smallest_unit( 999, 'USD' );   // 9.99 (float)
+// Serialise a Stripe object to a plain stdClass (safe for wp_cache, transients, REST)
+$plain = Utilities::serialize_object( $stripe_customer );
 ```
 
 ---
 
 ## Webhook Data Extraction Reference
 
-Each resource class exposes a method that assembles everything needed from a single webhook event, eliminating multiple
-API round-trips in handler code.
+Quick reference for extracting normalised data from webhook events:
 
-| Event                        | Method                                          | Returns                                        |
-|------------------------------|-------------------------------------------------|------------------------------------------------|
-| `checkout.session.completed` | `Checkout::get_completed_data( $session_id )`   | Full order + line items + discount             |
-| `invoice.paid`               | `Invoices::get_renewal_data( $invoice_id )`     | Renewal order data; `null` for initial invoice |
-| `customer.subscription.*`    | `Subscriptions::get_event_data( $event )`       | Normalised subscription row                    |
-| `charge.refunded`            | `Refunds::get_refund_data( $event )`            | Refund amounts and status                      |
-| `payment_intent.succeeded`   | `PaymentIntents::get_payment_details( $pi_id )` | Card brand, last4, country                     |
+| Webhook Event                                                      | Method                            | Key Data Returned                                                                                      |
+|--------------------------------------------------------------------|-----------------------------------|--------------------------------------------------------------------------------------------------------|
+| `checkout.session.completed`                                       | `Checkout::get_completed_data()`  | session_id, customer, total, currency, line_items[], discount[], payment details, metadata             |
+| `invoice.paid`                                                     | `Invoices::get_renewal_data()`    | invoice_id, customer, total, subtotal, tax, line_items[] with periods, payment details, billing_reason |
+| `customer.subscription.created/updated/deleted/paused/resumed/...` | `Subscriptions::get_event_data()` | subscription_id, customer_id, status, price_id, product_id, period, cancel flags, payment method       |
+| `charge.refunded`                                                  | `Refunds::get_refund_data()`      | charge_id, payment_intent_id, amounts, fully_refunded flag, reason, refund_id                          |
+| `charge.dispute.created/updated/closed`                            | `Disputes::get_event_data()`      | dispute_id, charge_id, payment_intent_id, amount, reason, status, evidence_due_by                      |
+| `customer.entitlement.active_entitlement_summary.updated`          | `Entitlements::get_summary()`     | customer_id, lookup_keys[], count, updated_at                                                          |
 
 ---
 
-## Requirements
+## Currency Support
 
-- PHP 8.2 or higher
-- WordPress 6.9.1 or higher
-- Stripe PHP SDK ^19.0 (API version 2025-09-30.clover)
-- arraypress/wp-currencies ^1.0
+Currency handling is powered by `arraypress/wp-currencies`. Zero-decimal currencies (JPY, KRW, etc.) are automatically
+detected. All amount parameters in this library accept **major currency units** (e.g. `9.99` not `999`) — the library
+handles conversion internally.
+
+```php
+// Check if a currency is zero-decimal
+\ArrayPress\Stripe\Helpers\Format::zero_decimal( 19.99, 'USD' ); // 1999
+\ArrayPress\Stripe\Helpers\Format::zero_decimal( 1999, 'JPY' );  // 1999 (no conversion)
+```
+
+---
+
+## Error Handling
+
+All API methods return `WP_Error` on failure with structured error codes:
+
+```php
+$result = $products->create( [ 'name' => '' ] );
+
+if ( is_wp_error( $result ) ) {
+    $code    = $result->get_error_code();    // 'stripe_error' or 'stripe_not_configured'
+    $message = $result->get_error_message(); // Human-readable message from Stripe
+    $data    = $result->get_error_data();    // [ 'status' => 400, 'type' => 'invalid_request_error', ... ]
+}
+```
+
+Common error codes:
+
+| Code                    | Meaning                                                 |
+|-------------------------|---------------------------------------------------------|
+| `stripe_not_configured` | Client not initialised or keys missing                  |
+| `stripe_error`          | Stripe API returned an error                            |
+| `invalid_id`            | Malformed Stripe object ID                              |
+| `missing_param`         | Required parameter not provided                         |
+| `partial_replace`       | Replace created new object but failed to deactivate old |
+
+---
 
 ## License
 

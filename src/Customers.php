@@ -140,6 +140,44 @@ class Customers {
 	}
 
 	/**
+	 * Search for customers by name or email.
+	 *
+	 * Uses the Stripe Search API to find customers matching a query string.
+	 * Searches across name and email fields.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $query Search term to match against customer name or email.
+	 * @param int    $limit Maximum number of results to return (default 10, max 100).
+	 *
+	 * @return Customer[]|WP_Error Array of matching customers or WP_Error on failure.
+	 */
+	public function search_by_name( string $query, int $limit = 10 ): array|WP_Error {
+		$client = $this->client->stripe();
+
+		if ( ! $client ) {
+			return new WP_Error( 'stripe_not_configured', __( 'Stripe client is not configured.', 'arraypress' ) );
+		}
+
+		$query = trim( $query );
+
+		if ( empty( $query ) ) {
+			return new WP_Error( 'missing_param', __( 'Search query is required.', 'arraypress' ) );
+		}
+
+		try {
+			$result = $client->customers->search( [
+				'query' => "name~\"{$query}\" OR email~\"{$query}\"",
+				'limit' => (int) min( $limit, 100 ),
+			] );
+
+			return $result->data;
+		} catch ( \Exception $e ) {
+			return new WP_Error( 'stripe_error', $e->getMessage() );
+		}
+	}
+
+	/**
 	 * List customers from Stripe.
 	 *
 	 * @param array $params         {

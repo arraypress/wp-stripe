@@ -2,6 +2,7 @@
 
 namespace ArrayPress\Stripe;
 
+use ArrayPress\Currencies\Currency;
 use Exception;
 use Stripe\Transfer;
 use Stripe\TransferReversal;
@@ -80,12 +81,8 @@ class Transfers {
 		}
 
 		try {
-			$smallest_unit = function_exists( 'ArrayPress\\Currencies\\Currency::to_smallest_unit' )
-				? \ArrayPress\Currencies\Currency::to_smallest_unit( $amount, $currency )
-				: (int) round( $amount * 100 );
-
 			$params = [
-				'amount'      => $smallest_unit,
+				'amount'      => Currency::to_smallest_unit( $amount, $currency ),
 				'currency'    => strtolower( $currency ),
 				'destination' => $account_id,
 			];
@@ -253,11 +250,7 @@ class Transfers {
 			$params = [];
 
 			if ( $amount !== null ) {
-				$smallest_unit = function_exists( 'ArrayPress\\Currencies\\Currency::to_smallest_unit' )
-					? \ArrayPress\Currencies\Currency::to_smallest_unit( $amount, $currency )
-					: (int) round( $amount * 100 );
-
-				$params['amount'] = $smallest_unit;
+				$params['amount'] = Currency::to_smallest_unit( $amount, $currency );
 			}
 
 			foreach ( [ 'description', 'metadata', 'refund_application_fee' ] as $field ) {

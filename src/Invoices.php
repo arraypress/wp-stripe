@@ -18,7 +18,9 @@ namespace ArrayPress\Stripe;
 // Exit if accessed directly
 defined( 'ABSPATH' ) || exit;
 
+use ArrayPress\Currencies\Currency;
 use Exception;
+use Stripe\CreditNote;
 use Stripe\Exception\InvalidRequestException;
 use Stripe\Invoice;
 use WP_Error;
@@ -562,6 +564,161 @@ class Invoices {
 			return $stripe->invoices->update( $invoice_id, [
 				'description' => $memo,
 			] );
+		} catch ( Exception $e ) {
+			return new WP_Error( 'stripe_error', $e->getMessage() );
+		}
+	}
+
+	/** =========================================================================
+	 *  Credit Notes
+	 *  ======================================================================== */
+
+	/**
+	 * Create a credit note for an invoice.
+	 *
+	 * Issues a partial or full credit against a finalized invoice.
+	 * Can credit specific line items or a flat amount.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $invoice_id Stripe invoice ID.
+	 * @param array  $args       {
+	 *     Credit note parameters.
+	 *
+	 *     @type int    $amount      Credit amount in major currency units (auto-converted).
+	 *                               Mutually exclusive with lines.
+	 *     @type string $currency    Currency for amount conversion (default 'USD').
+	 *     @type array  $lines       Array of line item credits. Each: [
+	 *                                   'type'            => 'invoice_line_item',
+	 *                                   'invoice_line_item' => 'il_xxx',
+	 *                                   'quantity'        => 1,
+	 *                               ]
+	 *     @type string $reason      'duplicate', 'fraudulent', 'order_change', 'product_unsatisfactory'.
+	 *     @type string $memo        Customer-facing memo.
+	 *     @type array  $metadata    Metadata key/value pairs.
+	 *     @type string $credit_amount_type 'at_invoice_level' or 'proportional'. Controls how
+	 *                                       discount/tax is allocated (default proportional).
+	 * }
+	 *
+	 * @return CreditNote|WP_Error The created credit note or WP_Error.
+	 */
+	public function create_credit_note( string $invoice_id, array $args = [] ): CreditNote|WP_Error {
+		$stripe = $this->client->stripe();
+
+		if ( ! $stripe ) {
+			return new WP_Error( 'not_configured', __( 'Stripe client is not configured.', 'arraypress' ) );
+		}
+
+		try {
+			$params = [
+				'invoice' => $invoice_id,
+			];
+
+			// Amount (converted to the smallest unit)
+			if ( isset( $args['amount'] ) ) {
+				$currency          = $args['currency'] ?? 'USD';
+				$params['amount']  = Currency::to_smallest_unit( (float) ( $args['amount'] ?? 0 ), $currency );
+			}
+
+			// Line item credits
+			if ( isset( $args['lines'] ) ) {
+				$params['lines'] = $args['lines'];
+			}
+
+			// Optional fields
+			foreach ( [ 'reason', 'memo', 'metadata', 'credit_amount_type' ] as $key ) {
+				if ( isset( $args[ $key ] ) ) {
+					$params[ $key ] = $args[ $key ];
+				}
+			}
+
+			return $stripe->creditNotes->create( $params );
+		} catch ( Exception $e ) {
+			return new WP_Error( 'stripe_error', $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Retrieve a credit note.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $credit_note_id Stripe credit note ID (cn_xxx).
+	 * @param array  $params         Optional parameters (e.g. expand).
+	 *
+	 * @return CreditNote|WP_Error The credit note or WP_Error.
+	 */
+	public function get_credit_note( string $credit_note_id, array $params = [] ): CreditNote|WP_Error {
+		$stripe = $this->client->stripe();
+
+		if ( ! $stripe ) {
+			return new WP_Error( 'not_configured', __( 'Stripe client is not configured.', 'arraypress' ) );
+		}
+
+		try {
+			return $stripe->creditNotes->retrieve( $credit_note_id, $params );
+		} catch ( Exception $e ) {
+			return new WP_Error( 'stripe_error', $e->getMessage() );
+		}
+	}
+
+	/**
+	 * List credit notes for an invoice.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $invoice_id Stripe invoice ID.
+	 * @param int    $limit      Maximum number of results (default 25, max 100).
+	 *
+	 * @return array{items: CreditNote[], has_more: bool, cursor: string}|WP_Error
+	 */
+	public function list_credit_notes( string $invoice_id, int $limit = 25 ): array|WP_Error {
+		$stripe = $this->client->stripe();
+
+		if ( ! $stripe ) {
+			return new WP_Error( 'not_configured', __( 'Stripe client is not configured.', 'arraypress' ) );
+		}
+
+		try {
+			$result = $stripe->creditNotes->all( [
+				'invoice' => $invoice_id,
+				'limit'   => (int) min( $limit, 100 ),
+			] );
+
+			$items  = $result->data;
+			$cursor = ! empty( $items ) ? end( $items )->id : '';
+
+			return [
+				'items'    => $items,
+				'has_more' => $result->has_more,
+				'cursor'   => $cursor,
+			];
+		} catch ( Exception $e ) {
+			return new WP_Error( 'stripe_error', $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Void a credit note.
+	 *
+	 * Can only void credit notes that are in 'issued' status.
+	 * Voiding restores the original invoice balance.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $credit_note_id Stripe credit note ID (cn_xxx).
+	 *
+	 * @return CreditNote|WP_Error The voided credit note or WP_Error.
+	 */
+	public function void_credit_note( string $credit_note_id ): CreditNote|WP_Error {
+		$stripe = $this->client->stripe();
+
+		if ( ! $stripe ) {
+			return new WP_Error( 'not_configured', __( 'Stripe client is not configured.', 'arraypress' ) );
+		}
+
+		try {
+			return $stripe->creditNotes->voidCreditNote( $credit_note_id );
 		} catch ( Exception $e ) {
 			return new WP_Error( 'stripe_error', $e->getMessage() );
 		}

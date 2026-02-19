@@ -25,6 +25,8 @@ use WP_Error;
  */
 class PaymentLinks {
 
+	use Traits\Serializable;
+
 	/**
 	 * The Stripe client instance.
 	 *
@@ -266,6 +268,34 @@ class PaymentLinks {
 		} catch ( Exception $e ) {
 			return new WP_Error( 'stripe_error', $e->getMessage() );
 		}
+	}
+
+	/**
+	 * List payment links as plain serializable objects.
+	 *
+	 * Returns the same data as list() but with Stripe objects converted
+	 * to plain stdClass objects, safe for wp_cache, transients, and REST responses.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param array $params {
+	 *     Optional. Filter and pagination parameters.
+	 *
+	 *     @type bool   $active         Filter by active status.
+	 *     @type int    $limit          Number of results per page (default 25, max 100).
+	 *     @type string $starting_after Cursor for pagination.
+	 * }
+	 *
+	 * @return array{items: \stdClass[], has_more: bool, cursor: string}|WP_Error
+	 */
+	public function list_serialized( array $params = [] ): array|WP_Error {
+		$result = $this->list( $params );
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return $this->serialize_result( $result );
 	}
 
 	/**
