@@ -387,4 +387,31 @@ class Coupons {
 		}
 	}
 
+	/**
+	 * Reactivate a manually deactivated promotion code.
+	 *
+	 * Only codes that were explicitly deactivated via deactivate_code() can be
+	 * reactivated. Codes that became inactive due to max_redemptions being reached,
+	 * expiry date passing, or the underlying coupon being invalid cannot be
+	 * reactivated — they are permanently inactive.
+	 *
+	 * @param string $code_id Stripe promotion code ID (promo_xxx).
+	 *
+	 * @return PromotionCode|WP_Error
+	 * @since 1.0.0
+	 */
+	public function reactivate_code( string $code_id ): PromotionCode|WP_Error {
+		$stripe = $this->client->stripe();
+
+		if ( ! $stripe ) {
+			return new WP_Error( 'not_configured', __( 'Stripe client is not configured.', 'arraypress' ) );
+		}
+
+		try {
+			return $stripe->promotionCodes->update( $code_id, [ 'active' => true ] );
+		} catch ( Exception $e ) {
+			return new WP_Error( 'stripe_error', $e->getMessage() );
+		}
+	}
+
 }

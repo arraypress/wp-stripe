@@ -152,4 +152,95 @@ class Dashboard {
 		return self::url( 'coupons', $coupon_id, $is_test );
 	}
 
+	/**
+	 * Get the Stripe Dashboard URL for a tax rate.
+	 *
+	 * @param string $tax_rate_id Stripe tax rate ID (txr_xxx).
+	 * @param bool   $is_test     Whether this is a test mode resource. Default false.
+	 *
+	 * @return string Stripe Dashboard URL.
+	 * @since 1.0.0
+	 */
+	public static function tax_rate( string $tax_rate_id, bool $is_test = false ): string {
+		return self::url( 'tax-rates', $tax_rate_id, $is_test );
+	}
+
+	/**
+	 * Get a shipping rate dashboard URL.
+	 *
+	 * @param string $shipping_rate_id Stripe shipping rate ID (shr_xxx).
+	 * @param bool   $is_test          Whether this is a test mode resource. Default false.
+	 *
+	 * @return string Stripe Dashboard URL.
+	 * @since 1.0.0
+	 */
+	public static function shipping_rate( string $shipping_rate_id, bool $is_test = false ): string {
+		return self::url( 'shipping-rates', $shipping_rate_id, $is_test );
+	}
+
+	/**
+	 * Get a feature dashboard URL.
+	 *
+	 * @param string $feature_id Stripe feature ID (feat_xxx).
+	 * @param bool   $is_test    Whether this is a test mode resource. Default false.
+	 *
+	 * @return string Stripe Dashboard URL.
+	 * @since 1.0.0
+	 */
+	public static function feature( string $feature_id, bool $is_test = false ): string {
+		return self::url( 'features', $feature_id, $is_test );
+	}
+
+	/**
+	 * Get a dispute dashboard URL.
+	 *
+	 * @param string $dispute_id Stripe dispute ID (dp_xxx).
+	 * @param bool   $is_test    Whether this is a test mode resource. Default false.
+	 *
+	 * @return string Stripe Dashboard URL.
+	 * @since 1.0.0
+	 */
+	public static function dispute( string $dispute_id, bool $is_test = false ): string {
+		return self::url( 'disputes', $dispute_id, $is_test );
+	}
+
+	/**
+	 * Get a payment link dashboard URL.
+	 *
+	 * @param string $payment_link_id Stripe payment link ID (plink_xxx).
+	 * @param bool   $is_test         Whether this is a test mode resource. Default false.
+	 *
+	 * @return string Stripe Dashboard URL.
+	 * @since 1.0.0
+	 */
+	public static function payment_link( string $payment_link_id, bool $is_test = false ): string {
+		return self::url( 'payment-links', $payment_link_id, $is_test );
+	}
+
+	/**
+	 * Get a transfer dashboard URL.
+	 *
+	 * @param string $transfer_id Stripe transfer ID (tr_xxx).
+	 * @param bool   $is_test     Whether this is a test mode resource. Default false.
+	 *
+	 * @return string Stripe Dashboard URL.
+	 * @since 1.0.0
+	 */
+	public static function transfer( string $transfer_id, bool $is_test = false ): string {
+		return self::url( 'transfers', $transfer_id, $is_test );
+	}
+
+	/**
+	 * Get a Connect account dashboard URL.
+	 *
+	 * @param string $account_id Stripe connected account ID (acct_xxx).
+	 * @param bool   $is_test    Whether this is a test mode resource. Default false.
+	 *
+	 * @return string Stripe Dashboard URL.
+	 * @since 1.0.0
+	 */
+	public static function connect_account( string $account_id, bool $is_test = false ): string {
+		return self::url( 'connect/accounts', $account_id, $is_test );
+	}
+
 }
