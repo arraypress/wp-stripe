@@ -342,4 +342,105 @@ class Options {
 		];
 	}
 
+	/** =========================================================================
+	 *  Label Lookups
+	 *  ======================================================================== */
+
+	/**
+	 * Get the label for a recurring interval key.
+	 *
+	 * @param string $key     Interval key (e.g., 'month', 'one_time').
+	 * @param bool   $include_one_time Whether the one-time option is available.
+	 *
+	 * @return string Label or the key itself if not found.
+	 * @since 1.0.0
+	 */
+	public static function get_interval_label( string $key, bool $include_one_time = true ): string {
+		return self::intervals( $include_one_time )[ $key ] ?? $key;
+	}
+
+	/**
+	 * Get the label for a price type key.
+	 *
+	 * @param string $key Price type key (e.g., 'one_time', 'recurring').
+	 *
+	 * @return string Label or the key itself if not found.
+	 * @since 1.0.0
+	 */
+	public static function get_price_type_label( string $key ): string {
+		return self::price_types()[ $key ] ?? $key;
+	}
+
+	/**
+	 * Get the label for a coupon duration key.
+	 *
+	 * @param string $key Duration key (e.g., 'once', 'repeating', 'forever').
+	 *
+	 * @return string Label or the key itself if not found.
+	 * @since 1.0.0
+	 */
+	public static function get_coupon_duration_label( string $key ): string {
+		return self::coupon_durations()[ $key ] ?? $key;
+	}
+
+	/**
+	 * Get the label for a subscription status key.
+	 *
+	 * @param string $key Status key (e.g., 'active', 'past_due').
+	 *
+	 * @return string Label or the key itself if not found.
+	 * @since 1.0.0
+	 */
+	public static function get_subscription_status_label( string $key ): string {
+		return self::subscription_statuses()[ $key ] ?? $key;
+	}
+
+	/**
+	 * Get the label for an invoice status key.
+	 *
+	 * @param string $key Status key (e.g., 'paid', 'void').
+	 *
+	 * @return string Label or the key itself if not found.
+	 * @since 1.0.0
+	 */
+	public static function get_invoice_status_label( string $key ): string {
+		return self::invoice_statuses()[ $key ] ?? $key;
+	}
+
+	/**
+	 * Get the label for a charge status key.
+	 *
+	 * @param string $key Status key (e.g., 'succeeded', 'failed').
+	 *
+	 * @return string Label or the key itself if not found.
+	 * @since 1.0.0
+	 */
+	public static function get_charge_status_label( string $key ): string {
+		return self::charge_statuses()[ $key ] ?? $key;
+	}
+
+	/**
+	 * Get the label for a tax category code.
+	 *
+	 * @param string $key Stripe tax code (e.g., 'txcd_10103000').
+	 *
+	 * @return string Label or the key itself if not found.
+	 * @since 1.0.0
+	 */
+	public static function get_tax_category_label( string $key ): string {
+		return self::tax_categories()[ $key ] ?? $key;
+	}
+
+	/**
+	 * Get the label for a managed payments tax code.
+	 *
+	 * @param string $key Stripe tax code (e.g., 'txcd_10201000').
+	 *
+	 * @return string Label or the key itself if not found.
+	 * @since 1.0.0
+	 */
+	public static function get_managed_payments_tax_code_label( string $key ): string {
+		return self::managed_payments_tax_codes()[ $key ] ?? $key;
+	}
+
 }

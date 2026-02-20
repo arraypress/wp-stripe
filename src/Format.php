@@ -105,7 +105,7 @@ class Format {
 			return $formatted;
 		}
 
-		return $formatted . ' ' . Utilities::get_interval_text( $interval, $interval_count );
+		return $formatted . ' ' . Labels::get_interval_text( $interval, $interval_count );
 	}
 
 	/** =========================================================================
